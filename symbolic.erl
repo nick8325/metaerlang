@@ -102,7 +102,7 @@ map_bottom_up_with_type(Fun, Expr) ->
 
 %% Fresh name generation from labels.
 fresh_name(Exp) ->
-    list_to_atom("!var" ++ integer_to_list(get_label(Exp))).
+    list_to_atom("var!" ++ integer_to_list(get_label(Exp))).
 
 %% Alpha-rename all local names so they're unique.
 alpha_rename(Defs) ->
@@ -234,7 +234,7 @@ make_symbolic(clause, Clause) ->
           c_values([ runtime(new_var, []) || _ <- Vars ]),
           runtime(clause, [make_list(clause_pats(Clause)),
                            clause_guard(Clause),
-                           clause_body(Clause)]));
+                           c_fun([], clause_body(Clause))]));
 make_symbolic(alias, Alias) ->
     runtime(alias, [alias_var(Alias), alias_pat(Alias)]);
 make_symbolic(Type, Expr) when

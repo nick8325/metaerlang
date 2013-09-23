@@ -1,7 +1,7 @@
--module(symbolic_erlang).
+-module('symbolic!erlang').
 -compile(export_all).
 
-is_integer(X) ->
+'is_integer'(X) ->
     {guard, is_integer, [X]}.
 '>='(X, Y) ->
     {guard, '>=', [X, Y]}.

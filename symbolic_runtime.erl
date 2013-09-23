@@ -1,10 +1,9 @@
 -module(symbolic_runtime).
 -compile(export_all).
+-compile({no_auto_import, [apply/2]}).
 
-module_name(erlang) ->
-    symbolic_erlang;
 module_name(Mod) ->
-    list_to_atom("!symb" ++ atom_to_list(Mod)).
+    list_to_atom("symbolic!" ++ atom_to_list(Mod)).
 
 partial_application({thunk, Fun, Args}, Args2) ->
     {thunk, Fun, Args ++ Args2};
@@ -14,6 +13,8 @@ partial_application(Fun, Args) when is_function(Fun) ->
 in_function(Name, Fun) ->
     {in_function, Name, Fun}.
 
+apply({thunk, Fun, Args}, Args2) ->
+    apply(Fun, Args ++ Args2);
 apply(Fun, Args) ->
     case is_safe(Fun, Args) of
         true -> erlang:apply(Fun, Args);
