@@ -23,6 +23,12 @@
                module_name/1, module_defs/1, module_attrs/1, module_exports/1]).
 -import(cerl_trees, [label/1, get_label/1, free_variables/1]).
 
+recompile() ->
+    Files = [symbolic, symbolic_runtime, cerl_extra,
+             'symbolic!erlang', 'symbolic!lists', 'symbolic!lists_impl'],
+    [ begin compile:file(File), code:load_file(File) end || File <- Files ],
+    ok.
+
 c(Mod) ->
     c(Mod, []).
 c(Mod, Opts) ->
