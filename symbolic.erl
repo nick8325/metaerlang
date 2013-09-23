@@ -19,19 +19,29 @@
 c(Mod) ->
     c(Mod, []).
 c(Mod, Opts) ->
-    shell_default:c(Mod, [{core_transform, monkey}|Opts]).
+    Opts1 = [{core_transform, symbolic}, no_error_module_mismatch, binary
+            | Opts],
+    {ok, Mod, Bin} = compile:file(Mod, Opts1),
+    Mod1 = rename_module(Mod),
+    code:load_binary(Mod1, Mod1, Bin).
 
 core_transform(Mod, _Opts) ->
-    to_prolog(Mod),
-    Mod.
+    Mod1 = update_c_module(Mod, c_atom(rename_module(atom_val(module_name(Mod)))),
+                           module_exports(Mod), module_attrs(Mod), module_defs(Mod)),
+    {Mod2, _} = label(Mod1),
+    to_prolog(Mod2).
 
 to_prolog(Mod) ->
     Exports = lists:map(fun cerl:var_name/1, module_exports(Mod)),
-    Mod1 = core_to_core_pass(on_definitions(fun lambda_lift_letrec/1), Mod),
-    Mod2 = core_to_core_pass(on_definitions(fun lambda_lift/1), Mod1),
-    Mod3 = core_to_core_pass(on_definitions(fun remove_redundant_partial_application/1), Mod2),
-    io:format("~s~n", [core_pp:format(clear_anns(Mod3))]),
-    {module_name(Mod), Exports, Mod1}.
+    Mod1 = core_to_core_pass(on_definitions(fun uniquify_letrec/1), Mod),
+    Mod2 = core_to_core_pass(on_definitions(fun lambda_lift_letrec/1), Mod1),
+    Mod3 = core_to_core_pass(on_definitions(fun lambda_lift/1), Mod2),
+    Mod4 = core_to_core_pass(on_definitions(fun remove_redundant_partial_application/1), Mod3),
+    io:format("~s~n", [core_pp:format(clear_anns(Mod4))]),
+    Mod4.
+
+rename_module(Mod) ->
+    list_to_atom("$symb" ++ atom_to_list(Mod)).
 
 clear_anns(Exp) ->
     cerl_trees:map(fun clear_ann/1, Exp).
@@ -39,8 +49,7 @@ clear_ann(Exp) ->
     set_ann(Exp, []).
 
 pass(Fun, Mod) ->
-    {Mod1, _} = label(Mod),
-    Defs = module_defs(Mod1),
+    Defs = module_defs(Mod),
 
     OldDefs = put(defs, []),
     Fun(Defs),
@@ -62,6 +71,8 @@ emit(Name, Fun) ->
 
 fresh_name(Exp) ->
     list_to_atom("$var" ++ integer_to_list(get_label(Exp))).
+fresh_fun(Fun) ->
+    c_var({fresh_name(Fun), fun_arity(Fun)}).
 
 map_definitions(Fun, Defs) ->
     [ {Name, Fun(Body)} || {Name, Body} <- Defs ].
@@ -69,6 +80,37 @@ on_definitions(Fun) ->
     fun(Defs) -> map_definitions(Fun, Defs) end.
 map_with_type(Fun, Expr) ->
     cerl_trees:map(fun(E) -> Fun(type(E), E) end, Expr).
+
+%% Alpha-rename all letrec-bound names so they're unique.
+uniquify_letrec(Expr) ->
+    map_with_type(fun uniquify_letrec/2, Expr).
+uniquify_letrec(letrec, LetRec) ->
+    Defs = letrec_defs(LetRec),
+    Body = letrec_body(LetRec),
+
+    %% There is no easy way to deal with binders, so I use a trick to
+    %% avoid having to do it. Quoth the manual:
+    %% "[the label] is a unique number for every node, except for
+    %%  variables (and function name variables) which get the same
+    %%  label if they represent the same variable."
+    %% So, when substituting, we look at labels rather than names.
+
+    Subst = [{get_label(Name), fresh_fun(Fun)} || {Name, Fun} <- Defs],
+    update_c_letrec(LetRec,
+                    [{fresh_fun(Fun), subst_label(Subst, Fun)} || {Name, Fun} <- Defs],
+                    subst_label(Subst, Body));
+uniquify_letrec(_, Expr) ->
+    Expr.
+
+subst_label(Subst, Expr) ->
+    map_with_type(fun(Type, E) -> subst_label(Subst, Type, E) end, Expr).
+subst_label(Subst, var, Var) ->
+    case lists:keyfind(catch get_label(Var), 1, Subst) of
+        {_, New} -> New;
+        false -> Var
+    end;
+subst_label(_, _, Expr) ->
+    Expr.
 
 %% Lambda-lift all functions defined in letrecs.
 lambda_lift_letrec(Expr) ->
@@ -80,19 +122,10 @@ lambda_lift_letrec(letrec, LetRec) ->
             [ c_var(X) || {_, Fun} <- Defs,
                           X <- free_variables(Fun),
                           is_local(X) ]),
-    %% There is no easy way to deal with binders, so I use a trick to
-    %% avoid having to do it. Quoth the manual:
-    %% "[the label] is a unique number for every node, except for
-    %%  variables (and function name variables) which get the same
-    %%  label if they represent the same variable."
-    %% So, when substituting, we look at labels rather than names.
     
-    %% A substitution from label to partially-applied function.
-    Subst = [{get_label(Name),
-              partial_application(lambda_lifted_name(Env, Name, Fun), Env)}
-             || {Name, Fun} <- Defs],
-    %% Generate the lambda-lifted functions.
-    [ emit(lambda_lifted_name(Env, Name, Fun),
+    Subst = [{Name, partial_application(lambda_lifted_name(Env, Name), Env)}
+             || {Name, _} <- Defs],
+    [ emit(lambda_lifted_name(Env, Name),
            c_fun(Env ++ fun_vars(Fun), subst(Subst, fun_body(Fun))))
       || {Name, Fun} <- Defs ],
     subst(Subst, Body);
@@ -104,18 +137,19 @@ is_local({_,_}) ->
 is_local(_) ->
     true.
 
+lambda_lifted_name(Env, Name) ->
+    {Fun, Arity} = var_name(Name),
+    c_var({Fun, length(Env) + Arity}).
+
 subst(Subst, Expr) ->
     map_with_type(fun(Type, E) -> subst(Subst, Type, E) end, Expr).
 subst(Subst, var, Var) ->
-    case lists:keyfind(catch get_label(Var), 1, Subst) of
+    case lists:keyfind(catch Var, 1, Subst) of
         {_, New} -> New;
         false -> Var
     end;
 subst(_, _, Expr) ->
     Expr.
-
-lambda_lifted_name(Env, Name, Body) ->
-    c_var({fresh_name(Name), length(Env) + fun_arity(Body)}).
 
 partial_application(Fun, []) ->
     Fun;
@@ -149,7 +183,7 @@ lambda_lift('fun', Fun) ->
     Vars = fun_vars(Fun),
     Body = fun_body(Fun),
     Env = [ c_var(X) || X <- free_variables(Fun), is_local(X) ],
-    Name = lambda_lifted_name(Env, Fun, Fun),
+    Name = lambda_lifted_name(Env, fresh_fun(Fun)),
     emit(Name, c_fun(Env ++ Vars, Body)),
     partial_application(Name, Env);
 lambda_lift(_, Expr) ->
