@@ -1,12 +1,13 @@
 -module(symbolic).
 -compile(export_all).
 
--import(cerl, [type/1,
+-import(cerl, [type/1, meta/1,
                set_ann/2,
                c_int/1,
                c_atom/1, atom_val/1,
                c_var/1, var_name/1,
-               c_tuple/1, make_list/1, list_elements/1,
+               c_tuple/1, tuple_es/1,
+               make_list/1, list_elements/1,
                alias_var/1, alias_pat/1,
                update_c_cons/3, cons_head/1, cons_tail/1,
                update_c_fun/3, c_fun/2, fun_arity/1, fun_vars/1, fun_body/1,
@@ -28,27 +29,24 @@ c(Mod, Opts) ->
     Opts1 = [{core_transform, symbolic}, no_error_module_mismatch, binary
             | Opts],
     {ok, Mod, Bin} = compile:file(Mod, Opts1),
-    Mod1 = rename_module(Mod),
+    Mod1 = symbolic_runtime:runtime_name(Mod),
     code:load_binary(Mod1, Mod1, Bin).
 
 core_transform(Mod, _Opts) ->
-    Mod1 = update_c_module(Mod, c_atom(rename_module(atom_val(module_name(Mod)))),
+    Mod1 = update_c_module(Mod, c_atom(symbolic_runtime:runtime_name(atom_val(module_name(Mod)))),
                            module_exports(Mod), module_attrs(Mod), module_defs(Mod)),
     {Mod2, _} = label(Mod1),
-    to_prolog(Mod2).
+    to_prolog(module_name(Mod), Mod2).
 
-to_prolog(Mod) ->
+to_prolog(Name, Mod) ->
     Mod1 = core_to_core_pass(on_definitions(fun uniquify_letrec/1), Mod),
     Mod2 = core_to_core_pass(on_definitions(fun lambda_lift_letrec/1), Mod1),
     Mod3 = core_to_core_pass(on_definitions(fun lambda_lift/1), Mod2),
     Mod4 = core_to_core_pass(on_definitions(fun remove_redundant_partial_application/1), Mod3),
-    Mod5 = core_to_core_pass(fun(Defs) -> make_symbolic(module_name(Mod4), Defs) end,
+    Mod5 = core_to_core_pass(fun(Defs) -> make_symbolic(Name, Defs) end,
                              Mod4),
     io:format("~s~n", [core_pp:format(clear_anns(Mod5))]),
     Mod5.
-
-rename_module(Mod) ->
-    list_to_atom("!symb" ++ atom_to_list(Mod)).
 
 clear_anns(Exp) ->
     cerl_trees:map(fun clear_ann/1, Exp).
@@ -232,28 +230,41 @@ remove_redundant_partial_application(_, Expr) ->
 
 %% Translate function definitions to a symbolic form.
 make_symbolic(Mod, Defs) ->
-    [ {Name, make_symbolic_fun(Mod, Name, Fun)}
+    [ {Name, make_symbolic_fun(Mod, Fun)}
     || {Name, Fun} <- Defs ].
-make_symbolic_fun(Mod, Name, Fun) ->
-    {Atom, _} = var_name(Name),
+make_symbolic_fun(Mod, Fun) ->
     Vars = fun_vars(Fun),
-    Body = map_with_type(fun make_symbolic_expr/2, fun_body(Fun)),
-    c_fun(Vars,
-          runtime(calling,
-                  [c_tuple([Mod, c_atom(Atom), make_list(Vars)]),
-                   c_fun([], Body)])).
+    Body = map_with_type(
+             fun(Type, Expr) -> make_symbolic_expr(Mod, Type, Expr) end,
+             fun_body(Fun)),
+    c_fun(Vars, Body).
 
-make_symbolic_expr(apply, Apply) ->
+make_symbolic_expr(_, apply, Apply) ->
     runtime(apply, [apply_op(Apply), make_list(apply_args(Apply))]);
-make_symbolic_expr(call, Call) ->
-    runtime(call, [call_module(Call),
-                   call_name(Call),
-                   make_list(call_args(Call))]);
-make_symbolic_expr('case', Case) ->
+make_symbolic_expr(_, call, Call) ->
+    case unpack_runtime(Call) of
+        false ->
+            runtime(call, [call_module(Call),
+                           call_name(Call),
+                           make_list(call_args(Call))]);
+        _ -> Call
+    end;
+make_symbolic_expr(_, tuple, Tuple) ->
+    runtime(tuple, [make_list(tuple_es(Tuple))]);
+make_symbolic_expr(_, primop, Primop) ->
+    runtime(primop, [primop_name(Primop)]);
+make_symbolic_expr(Name, var, Var) ->
+    case var_name(Var) of
+        {Fun, Arity} ->
+            runtime(local_fun, [Fun, Name, c_atom(Fun), c_int(Arity)]);
+        _ ->
+            Var
+    end;
+make_symbolic_expr(_, 'case', Case) ->
     runtime('case',
             [make_list(values_to_list(case_arg(Case))),
              make_list(case_clauses(Case))]);
-make_symbolic_expr(clause, Clause) ->
+make_symbolic_expr(_, clause, Clause) ->
     %% Instantiate the variables in the clause's pattern.
     Vars = clause_vars(Clause),
     c_let(Vars,
@@ -261,17 +272,15 @@ make_symbolic_expr(clause, Clause) ->
           runtime(clause, [make_list(clause_pats(Clause)),
                            clause_guard(Clause),
                            clause_body(Clause)]));
-make_symbolic_expr(alias, Alias) ->
+make_symbolic_expr(_, alias, Alias) ->
     runtime(alias, [alias_var(Alias), alias_pat(Alias)]);
-make_symbolic_expr(Type, Expr) when
-      Type == 'fun'; Type == literal; Type == var;
-      Type == 'let'; Type == seq; Type == values; Type == cons;
-      Type == tuple ->
+make_symbolic_expr(_, Type, Expr) when
+      Type == literal; Type == 'let'; Type == seq; Type == values; Type == cons ->
     Expr;
-make_symbolic_expr(_, Expr) ->
-    runtime(unknown, [Expr]).
+make_symbolic_expr(_, _, Expr) ->
+    runtime(unknown, [meta(Expr)]).
 
-%% Missing: binary bitstr catch letrec module primop receive try
+%% Missing: binary bitstr catch fun letrec module receive try
 
 values_to_list(Expr) ->
     case type(Expr) of
