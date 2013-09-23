@@ -1,7 +1,7 @@
 -module(symbolic_runtime).
 -compile(export_all).
 
-runtime_name(Mod) ->
+module_name(Mod) ->
     list_to_atom("!symb" ++ atom_to_list(Mod)).
 
 partial_application({thunk, Fun, Args}, Args2) ->
@@ -24,9 +24,9 @@ is_safe(_, _) ->
     false.
 
 make_fun(Mod, Fun, Arity) when is_atom(Mod), is_atom(Fun), is_integer(Arity) ->
-    case erlang:function_exported(runtime_name(Mod), Fun, Arity) of
+    case erlang:function_exported(module_name(Mod), Fun, Arity) of
         true ->
-            erlang:make_fun(runtime_name(Mod), Fun, Arity);
+            erlang:make_fun(module_name(Mod), Fun, Arity);
         false ->
             {'fun', Mod, Fun, Arity}
     end;

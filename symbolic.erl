@@ -29,30 +29,37 @@ c(Mod, Opts) ->
     Opts1 = [{core_transform, symbolic}, no_error_module_mismatch, binary
             | Opts],
     {ok, Mod, Bin} = compile:file(Mod, Opts1),
-    Mod1 = symbolic_runtime:runtime_name(Mod),
+    Mod1 = symbolic_runtime:module_name(Mod),
     code:load_binary(Mod1, Mod1, Bin).
 
 core_transform(Mod, _Opts) ->
-    Mod1 = update_c_module(Mod, c_atom(symbolic_runtime:runtime_name(atom_val(module_name(Mod)))),
-                           module_exports(Mod), module_attrs(Mod), module_defs(Mod)),
+    Name = atom_val(module_name(Mod)),
+    NewName = c_atom(symbolic_runtime:module_name(Name)),
+    OldName = put(module_name, NewName),
+    Mod1 = update_c_module(Mod, NewName, module_exports(Mod),
+                           module_attrs(Mod), module_defs(Mod)),
     {Mod2, _} = label(Mod1),
-    to_prolog(module_name(Mod), Mod2).
+    Mod3 = to_prolog(Mod2),
+    put(module_name, OldName),
+    Mod3.
 
-to_prolog(Name, Mod) ->
-    Mod1 = core_to_core_pass(on_definitions(fun uniquify_letrec/1), Mod),
-    Mod2 = core_to_core_pass(on_definitions(fun lambda_lift_letrec/1), Mod1),
-    Mod3 = core_to_core_pass(on_definitions(fun lambda_lift/1), Mod2),
-    Mod4 = core_to_core_pass(on_definitions(fun remove_redundant_partial_application/1), Mod3),
-    Mod5 = core_to_core_pass(fun(Defs) -> make_symbolic(Name, Defs) end,
-                             Mod4),
-    io:format("~s~n", [core_pp:format(clear_anns(Mod5))]),
-    Mod5.
+to_prolog(Mod) ->
+    Mod1 = core_to_core_pass(fun alpha_rename/1, Mod),
+    Mod2 = definitions_pass(fun lambda_lift_letrec/1, Mod1),
+    Mod3 = definitions_pass(fun lambda_lift/1, Mod2),
+    Mod4 = definitions_pass(fun remove_redundant_partial_application/1, Mod3),
+    definitions_pass(fun make_symbolic/1, Mod4).
+
+pretty_print(Mod) ->
+    io:format("~s~n", [core_pp:format(clear_anns(Mod))]).
 
 clear_anns(Exp) ->
     cerl_trees:map(fun clear_ann/1, Exp).
 clear_ann(Exp) ->
     set_ann(Exp, []).
 
+%% Passes. A pass is something that transforms the core
+%% while perhaps emitting new definitions.
 pass(Fun, Mod) ->
     Defs = module_defs(Mod),
 
@@ -62,6 +69,7 @@ pass(Fun, Mod) ->
     put(defs, OldDefs),
     NewDefs.
 
+%% A pass that returns a core module.
 core_to_core_pass(Fun, Mod) ->
     Fun1 = fun(Defs) ->
         Res = Fun(Defs),
@@ -71,82 +79,92 @@ core_to_core_pass(Fun, Mod) ->
     update_c_module(Mod, module_name(Mod), module_exports(Mod),
                     module_attrs(Mod), NewDefs).
 
+%% A pass that acts on each definition separately.
+definitions_pass(Fun, Mod) ->
+    core_to_core_pass(fun(Defs) ->
+        [ {Name, Fun(Body)} || {Name, Body} <- Defs ]
+    end, Mod).
+
+%% Emit a new function.
 emit(Name, Fun) ->
     put(defs, [{Name, Fun}|get(defs)]).
 
-fresh_name(Exp) ->
-    list_to_atom("!var" ++ integer_to_list(get_label(Exp))).
-fresh_fun(Fun) ->
-    c_var({fresh_name(Fun), fun_arity(Fun)}).
-
-map_definitions(Fun, Defs) ->
-    [ {Name, Fun(Body)} || {Name, Body} <- Defs ].
-on_definitions(Fun) ->
-    fun(Defs) -> map_definitions(Fun, Defs) end.
+%% Mapping over expressions.
 map_with_type(Fun, Expr) ->
     cerl_trees:map(fun(E) -> Fun(type(E), E) end, Expr).
+map_bottom_up_with_type(Fun, Expr) ->
+    cerl_extra:map_bottom_up(fun(E) -> Fun(type(E), E) end, Expr).
 
-%% Alpha-rename all letrec-bound names so they're unique.
-uniquify_letrec(Expr) ->
-    map_with_type(fun uniquify_letrec/2, Expr).
-uniquify_letrec(letrec, LetRec) ->
-    Defs = letrec_defs(LetRec),
-    Body = letrec_body(LetRec),
+%% Fresh name generation from labels.
+fresh_name(Exp) ->
+    list_to_atom("!var" ++ integer_to_list(get_label(Exp))).
 
-    %% There is no easy way to deal with binders, so I use a trick to
-    %% avoid having to do it. Quoth the manual:
+%% Alpha-rename all local names so they're unique.
+alpha_rename(Defs) ->
+    Globals = gb_sets:from_list([ var_name(Name) || {Name, _} <- Defs ]),
+    Rename = fun(Type, Expr) ->
+                     alpha_rename(Globals, Type, Expr)
+             end,
+    [ {Rename(var, Name), map_with_type(Rename, Body)}
+      || {Name, Body} <- Defs ].
+
+alpha_rename(Globals, var, Var) ->
+    %% Quoth the manual:
     %% "[the label] is a unique number for every node, except for
     %%  variables (and function name variables) which get the same
     %%  label if they represent the same variable."
-    %% So, when substituting, we look at labels rather than names.
-
-    Subst = [{get_label(Name), fresh_fun(Fun)} || {Name, Fun} <- Defs],
-    update_c_letrec(LetRec,
-                    [{fresh_fun(Fun), subst_label(Subst, Fun)}
-                    || {_, Fun} <- Defs],
-                    subst_label(Subst, Body));
-uniquify_letrec(_, Expr) ->
-    Expr.
-
-subst_label(Subst, Expr) ->
-    map_with_type(fun(Type, E) -> subst_label(Subst, Type, E) end, Expr).
-subst_label(Subst, var, Var) ->
-    case lists:keyfind(catch get_label(Var), 1, Subst) of
-        {_, New} -> New;
-        false -> Var
+    %% Thus, we can just generate a name based on the variable's label.
+    case gb_sets:is_member(var_name(Var), Globals) of
+        true ->
+            Var;
+        false ->
+            c_var(rename(fresh_name(Var), var_name(Var)))
     end;
-subst_label(_, _, Expr) ->
+alpha_rename(_, _, Expr) ->
     Expr.
+
+rename(Name, {_, Arity}) ->
+    {Name, Arity};
+rename(Name, _) ->
+    Name.
 
 %% Lambda-lift all functions defined in letrecs.
 lambda_lift_letrec(Expr) ->
-    map_with_type(fun lambda_lift_letrec/2, Expr).
+    map_bottom_up_with_type(fun lambda_lift_letrec/2, Expr).
 lambda_lift_letrec(letrec, LetRec) ->
     Defs = letrec_defs(LetRec),
     Body = letrec_body(LetRec),
-    Env = lists:usort(
-            [ c_var(X) || {_, Fun} <- Defs,
-                          X <- free_variables(Fun),
-                          is_local(X) ]),
-    
-    Subst = [{Name, partial_application(lambda_lifted_name(Env, Name), Env)}
-             || {Name, _} <- Defs],
-    [ emit(lambda_lifted_name(Env, Name),
-           c_fun(Env ++ fun_vars(Fun), subst(Subst, fun_body(Fun))))
-      || {Name, Fun} <- Defs ],
-    subst(Subst, Body);
+    do_lambda_lift_letrec(Defs, Body);
 lambda_lift_letrec(_, Expr) ->
     Expr.
 
+do_lambda_lift_letrec(Defs, Body) ->
+    %% All variables that are free in the letrec's defs.
+    Env =
+        lists:map(fun cerl:c_var/1,
+        lists:usort(
+          [ X || {_, Fun} <- Defs,
+                 X <- free_variables(Fun), is_local(X) ] --
+          [ var_name(Name) || {Name, _} <- Defs ])),
+
+    Subst =
+        [ {Name,
+           partial_application(bump_arity(length(Env), Name), Env)}
+        || {Name, _} <- Defs],
+    [ emit(bump_arity(length(Env), Name),
+           lambda_lift_letrec(
+           c_fun(Env ++ fun_vars(Fun), subst(Subst, fun_body(Fun)))))
+      || {Name, Fun} <- Defs ],
+    subst(Subst, Body).
 is_local({_,_}) ->
     false;
 is_local(_) ->
     true.
-
-lambda_lifted_name(Env, Name) ->
+bump_arity(N, Name) ->
     {Fun, Arity} = var_name(Name),
-    c_var({Fun, length(Env) + Arity}).
+    c_var({Fun, N + Arity}).
 
+%% This substitution function assumes there are no name clashes.
 subst(Subst, Expr) ->
     map_with_type(fun(Type, E) -> subst(Subst, Type, E) end, Expr).
 subst(Subst, var, Var) ->
@@ -165,19 +183,16 @@ runtime() ->
 runtime(Fun, Args) ->
     c_call(runtime(), c_atom(Fun), Args).
 unpack_runtime(Expr) ->
-    case type(Expr) of
-        call ->
-            Mod = call_module(Expr),
-            RuntimeName = runtime_name(),
-            case atom_val(Mod) of
-                RuntimeName ->
-                    {atom_val(call_name(Expr)), call_args(Expr)};
-                _ ->
-                    false
-            end;
+    unpack_runtime(type(Expr), Expr).
+unpack_runtime(call, Call) ->
+    case atom_val(call_module(Call)) == runtime_name() of
+        true ->
+            {atom_val(call_name(Call)), call_args(Call)};
         _ ->
             false
-    end.
+    end;
+unpack_runtime(_, _) ->
+    false.
 
 %% Generate a call to the partial application "primop".
 partial_application(Fun, []) ->
@@ -193,23 +208,14 @@ unpack_partial_application(Expr) ->
     end.
 
 %% Lambda-lift ordinary funs, not defined inside letrec.
-lambda_lift(Expr) ->
-    case type(Expr) of
-        %% Don't lambda-lift top-level functions!
-        'fun' ->
-            update_c_fun(Expr,
-                         fun_vars(Expr),
-                         map_with_type(fun lambda_lift/2, fun_body(Expr)));
-        _ ->
-            map_with_type(fun lambda_lift/2, Expr)
-    end.
+lambda_lift(Fun) ->
+    %% Don't lambda-lift top-level functions!
+    update_c_fun(Fun, fun_vars(Fun),
+                 map_with_type(fun lambda_lift/2, fun_body(Fun))).
 lambda_lift('fun', Fun) ->
-    Vars = fun_vars(Fun),
-    Body = fun_body(Fun),
-    Env = [ c_var(X) || X <- free_variables(Fun), is_local(X) ],
-    Name = lambda_lifted_name(Env, fresh_fun(Fun)),
-    emit(Name, c_fun(Env ++ Vars, Body)),
-    partial_application(Name, Env);
+    %% Reduce to letrec.
+    Name = c_var({fresh_name(Fun), fun_arity(Fun)}),
+    do_lambda_lift_letrec([{Name, Fun}], Name);
 lambda_lift(_, Expr) ->
     Expr.
 
@@ -229,19 +235,11 @@ remove_redundant_partial_application(_, Expr) ->
     Expr.
 
 %% Translate function definitions to a symbolic form.
-make_symbolic(Mod, Defs) ->
-    [ {Name, make_symbolic_fun(Mod, Fun)}
-    || {Name, Fun} <- Defs ].
-make_symbolic_fun(Mod, Fun) ->
-    Vars = fun_vars(Fun),
-    Body = map_with_type(
-             fun(Type, Expr) -> make_symbolic_expr(Mod, Type, Expr) end,
-             fun_body(Fun)),
-    c_fun(Vars, Body).
-
-make_symbolic_expr(_, apply, Apply) ->
+make_symbolic(Expr) ->
+    map_with_type(fun make_symbolic/2, Expr).
+make_symbolic(apply, Apply) ->
     runtime(apply, [apply_op(Apply), make_list(apply_args(Apply))]);
-make_symbolic_expr(_, call, Call) ->
+make_symbolic(call, Call) ->
     case unpack_runtime(Call) of
         false ->
             runtime(call, [call_module(Call),
@@ -249,22 +247,22 @@ make_symbolic_expr(_, call, Call) ->
                            make_list(call_args(Call))]);
         _ -> Call
     end;
-make_symbolic_expr(_, tuple, Tuple) ->
+make_symbolic(tuple, Tuple) ->
     runtime(tuple, [make_list(tuple_es(Tuple))]);
-make_symbolic_expr(_, primop, Primop) ->
+make_symbolic(primop, Primop) ->
     runtime(primop, [primop_name(Primop)]);
-make_symbolic_expr(Name, var, Var) ->
+make_symbolic(var, Var) ->
     case var_name(Var) of
         {Fun, Arity} ->
-            runtime(local_fun, [Fun, Name, c_atom(Fun), c_int(Arity)]);
+            runtime(local_fun, [Var, get(module_name), c_atom(Fun), c_int(Arity)]);
         _ ->
             Var
     end;
-make_symbolic_expr(_, 'case', Case) ->
+make_symbolic('case', Case) ->
     runtime('case',
             [make_list(values_to_list(case_arg(Case))),
              make_list(case_clauses(Case))]);
-make_symbolic_expr(_, clause, Clause) ->
+make_symbolic(clause, Clause) ->
     %% Instantiate the variables in the clause's pattern.
     Vars = clause_vars(Clause),
     c_let(Vars,
@@ -272,15 +270,17 @@ make_symbolic_expr(_, clause, Clause) ->
           runtime(clause, [make_list(clause_pats(Clause)),
                            clause_guard(Clause),
                            clause_body(Clause)]));
-make_symbolic_expr(_, alias, Alias) ->
+make_symbolic(alias, Alias) ->
     runtime(alias, [alias_var(Alias), alias_pat(Alias)]);
-make_symbolic_expr(_, Type, Expr) when
-      Type == literal; Type == 'let'; Type == seq; Type == values; Type == cons ->
+make_symbolic(Type, Expr) when
+      Type == literal; Type == 'let'; Type == seq; Type == values; Type == cons;
+      Type == 'fun' ->
     Expr;
-make_symbolic_expr(_, _, Expr) ->
+make_symbolic(_, Expr) ->
     runtime(unknown, [meta(Expr)]).
 
-%% Missing: binary bitstr catch fun letrec module receive try
+%% Missing: binary bitstr catch letrec module receive try
+%% (relevant: binary bitstr catch try)
 
 values_to_list(Expr) ->
     case type(Expr) of
