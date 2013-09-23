@@ -32,18 +32,24 @@ c(Mod, Opts) ->
     Mod1 = symbolic_runtime:module_name(Mod),
     code:load_binary(Mod1, Mod1, Bin).
 
-core_transform(Mod, _Opts) ->
+core_transform(Mod, Opts) ->
     Name = atom_val(module_name(Mod)),
     OldName = put(module_name, Name),
     NewName = c_atom(symbolic_runtime:module_name(Name)),
-    Mod1 = update_c_module(Mod, NewName, module_exports(Mod),
-                           module_attrs(Mod), module_defs(Mod)),
+    Mod1 =
+        case lists:member(no_error_module_mismatch, Opts) of
+            true ->
+                update_c_module(Mod, NewName, module_exports(Mod),
+                                module_attrs(Mod), module_defs(Mod));
+            false ->
+                Mod
+        end,
     {Mod2, _} = label(Mod1),
-    Mod3 = to_prolog(Mod2),
+    Mod3 = to_symbolic(Mod2),
     put(module_name, OldName),
     Mod3.
 
-to_prolog(Mod) ->
+to_symbolic(Mod) ->
     Mod1 = core_to_core_pass(fun alpha_rename/1, Mod),
     Mod2 = definitions_pass(fun lambda_lift_letrec/1, Mod1),
     Mod3 = definitions_pass(fun lambda_lift/1, Mod2),
