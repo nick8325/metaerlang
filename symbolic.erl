@@ -12,7 +12,7 @@
                update_c_cons/3, cons_head/1, cons_tail/1,
                update_c_fun/3, c_fun/2, fun_arity/1, fun_vars/1, fun_body/1,
                update_c_apply/3, c_apply/2, apply_op/1, apply_args/1,
-               c_call/3, call_module/1, call_name/1, call_args/1,
+               c_call/3, call_module/1, call_name/1, call_args/1, call_arity/1,
                c_primop/2, primop_name/1, primop_args/1,
                case_arg/1, case_clauses/1,
                clause_pats/1, clause_guard/1, clause_body/1, clause_vars/1,
@@ -34,21 +34,26 @@ c(Mod, Opts) ->
 
 core_transform(Mod, _Opts) ->
     Name = atom_val(module_name(Mod)),
+    OldName = put(module_name, Name),
     NewName = c_atom(symbolic_runtime:module_name(Name)),
-    OldName = put(module_name, NewName),
     Mod1 = update_c_module(Mod, NewName, module_exports(Mod),
                            module_attrs(Mod), module_defs(Mod)),
     {Mod2, _} = label(Mod1),
     Mod3 = to_prolog(Mod2),
     put(module_name, OldName),
-    pretty_print(Mod3),
     Mod3.
 
 to_prolog(Mod) ->
     Mod1 = core_to_core_pass(fun alpha_rename/1, Mod),
     Mod2 = definitions_pass(fun lambda_lift_letrec/1, Mod1),
     Mod3 = definitions_pass(fun lambda_lift/1, Mod2),
-    definitions_pass(fun make_symbolic/1, Mod3).
+    Mod4 = definitions_pass(fun make_symbolic/1, Mod3),
+    export_all(Mod4).
+
+export_all(Mod) ->
+    update_c_module(Mod, module_name(Mod),
+                    [Name || {Name, _} <- module_defs(Mod)],
+                    module_attrs(Mod), module_defs(Mod)).
 
 pretty_print(Mod) ->
     io:format("~s~n", [core_pp:format(clear_anns(Mod))]).
@@ -204,9 +209,9 @@ make_symbolic(Expr) ->
 make_symbolic(apply, Apply) ->
     runtime(apply, [apply_op(Apply), make_list(apply_args(Apply))]);
 make_symbolic(call, Call) ->
-    runtime(call, [call_module(Call),
-                   call_name(Call),
-                   make_list(call_args(Call))]);
+    Fun = runtime(make_fun,
+                  [call_module(Call), call_name(Call), c_int(call_arity(Call))]),
+    runtime(apply, [Fun, make_list(call_args(Call))]);
 make_symbolic(tuple, Tuple) ->
     runtime(tuple, [make_list(tuple_es(Tuple))]);
 make_symbolic(primop, Primop) ->
@@ -214,7 +219,7 @@ make_symbolic(primop, Primop) ->
 make_symbolic(var, Var) ->
     case var_name(Var) of
         {Fun, Arity} ->
-            runtime(local_fun, [Var, get(module_name), c_atom(Fun), c_int(Arity)]);
+            runtime(make_fun, [c_atom(get(module_name)), c_atom(Fun), c_int(Arity)]);
         _ ->
             Var
     end;

@@ -1,6 +1,8 @@
 -module(symbolic_runtime).
 -compile(export_all).
 
+module_name(erlang) ->
+    symbolic_erlang;
 module_name(Mod) ->
     list_to_atom("!symb" ++ atom_to_list(Mod)).
 
@@ -28,18 +30,11 @@ make_fun(Mod, Fun, Arity) when is_atom(Mod), is_atom(Fun), is_integer(Arity) ->
         true ->
             erlang:make_fun(module_name(Mod), Fun, Arity);
         false ->
-            {'fun', Mod, Fun, Arity}
+            io:format("Unknown function ~p:~p/~p~n", [Mod, Fun, Arity]),
+            failure()
     end;
 make_fun(Mod, Fun, Arity) ->
     {'fun', Mod, Fun, Arity}.
-
-local_fun(Fun, Mod, Name, Arity) ->
-    {local_fun, Fun, Mod, Name, Arity}.
-
-call(erlang, make_fun, [Mod, Fun, Arity]) ->
-    make_fun(Mod, Fun, Arity);
-call(Mod, Fun, Args) ->
-    ?MODULE:apply(make_fun(Mod, Fun, length(Args)), Args).
 
 'case'(Values, Clauses) ->
     {'case', Values, Clauses}.
@@ -50,8 +45,15 @@ clause(Patts, Guard, Body) ->
 tuple(Xs) ->
     {tuple, Xs}.
 
-primop(X) ->
-    {primop, X}.
+primop(partial_application, [F|Args]) ->
+    partial_application(F, Args);
+primop(match_fail, _) ->
+    failure();
+primop(Primop, Args) ->
+    {primop, Primop, Args}.
+
+failure() ->
+    {failure}.
 
 unknown(Expr) ->
     {unknown, Expr}.
