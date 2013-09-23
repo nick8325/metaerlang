@@ -1,13 +1,13 @@
 -module(symbolic).
 -compile(export_all).
 
--import(cerl, [type/1, meta/1,
+-import(cerl, [type/1, meta/1, abstract/1,
                set_ann/2,
                c_int/1,
                c_atom/1, atom_val/1,
                c_var/1, var_name/1,
                c_tuple/1, tuple_es/1,
-               make_list/1, list_elements/1,
+               make_list/1, list_elements/1, c_cons/2,
                alias_var/1, alias_pat/1,
                update_c_cons/3, cons_head/1, cons_tail/1,
                update_c_fun/3, c_fun/2, fun_arity/1, fun_vars/1, fun_body/1,
@@ -41,14 +41,14 @@ core_transform(Mod, _Opts) ->
     {Mod2, _} = label(Mod1),
     Mod3 = to_prolog(Mod2),
     put(module_name, OldName),
+    pretty_print(Mod3),
     Mod3.
 
 to_prolog(Mod) ->
     Mod1 = core_to_core_pass(fun alpha_rename/1, Mod),
     Mod2 = definitions_pass(fun lambda_lift_letrec/1, Mod1),
     Mod3 = definitions_pass(fun lambda_lift/1, Mod2),
-    Mod4 = definitions_pass(fun remove_redundant_partial_application/1, Mod3),
-    definitions_pass(fun make_symbolic/1, Mod4).
+    definitions_pass(fun make_symbolic/1, Mod3).
 
 pretty_print(Mod) ->
     io:format("~s~n", [core_pp:format(clear_anns(Mod))]).
@@ -176,36 +176,15 @@ subst(_, _, Expr) ->
     Expr.
 
 %% Generate a call to a runtime function.
-runtime_name() ->
-    symbolic_runtime.
-runtime() ->
-    c_atom(runtime_name()).
+-define(RUNTIME, symbolic_runtime).
 runtime(Fun, Args) ->
-    c_call(runtime(), c_atom(Fun), Args).
-unpack_runtime(Expr) ->
-    unpack_runtime(type(Expr), Expr).
-unpack_runtime(call, Call) ->
-    case atom_val(call_module(Call)) == runtime_name() of
-        true ->
-            {atom_val(call_name(Call)), call_args(Call)};
-        _ ->
-            false
-    end;
-unpack_runtime(_, _) ->
-    false.
+    c_call(c_atom(?RUNTIME), c_atom(Fun), Args).
 
 %% Generate a call to the partial application "primop".
 partial_application(Fun, []) ->
     Fun;
 partial_application(Fun, Args) ->
-    runtime(partial_application, [Fun, make_list(Args)]).
-unpack_partial_application(Expr) ->
-    case unpack_runtime(Expr) of
-        {partial_application, [Fun, Args]} ->
-            {Fun, list_elements(Args)};
-        _ ->
-            false
-    end.
+    c_primop(c_atom(partial_application), [Fun|Args]).
 
 %% Lambda-lift ordinary funs, not defined inside letrec.
 lambda_lift(Fun) ->
@@ -219,38 +198,19 @@ lambda_lift('fun', Fun) ->
 lambda_lift(_, Expr) ->
     Expr.
 
-%% Remove partial applications that are immediately applied.
-remove_redundant_partial_application(Expr) ->
-    map_with_type(fun remove_redundant_partial_application/2, Expr).
-remove_redundant_partial_application(apply, Apply) ->
-    Op = apply_op(Apply),
-    Args = apply_args(Apply),
-    case unpack_partial_application(Op) of
-        {F, Env} ->
-            c_apply(F, Env ++ Args);
-        false ->
-            Apply
-    end;
-remove_redundant_partial_application(_, Expr) ->
-    Expr.
-
 %% Translate function definitions to a symbolic form.
 make_symbolic(Expr) ->
     map_with_type(fun make_symbolic/2, Expr).
 make_symbolic(apply, Apply) ->
     runtime(apply, [apply_op(Apply), make_list(apply_args(Apply))]);
 make_symbolic(call, Call) ->
-    case unpack_runtime(Call) of
-        false ->
-            runtime(call, [call_module(Call),
-                           call_name(Call),
-                           make_list(call_args(Call))]);
-        _ -> Call
-    end;
+    runtime(call, [call_module(Call),
+                   call_name(Call),
+                   make_list(call_args(Call))]);
 make_symbolic(tuple, Tuple) ->
     runtime(tuple, [make_list(tuple_es(Tuple))]);
 make_symbolic(primop, Primop) ->
-    runtime(primop, [primop_name(Primop)]);
+    runtime(primop, [primop_name(Primop), make_list(primop_args(Primop))]);
 make_symbolic(var, Var) ->
     case var_name(Var) of
         {Fun, Arity} ->
