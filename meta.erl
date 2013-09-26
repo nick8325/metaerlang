@@ -1,5 +1,5 @@
 -module(meta).
--export([start/0, start_1/0, c/1, c/2, apply/4]).
+-export([start/0, start_1/0, c/1, c/2, apply/4, exports/1]).
 
 base() ->
     [meta_transform, meta_runtime, cerl_extra].
@@ -73,3 +73,9 @@ apply(Runtime, Mod, Fun, Args) ->
                       [Mod, Fun, length(Args)]),
             Runtime:failure()
     end.
+
+exports(Mod) ->
+    Mod1 = meta_transform:meta_module_name(Mod),
+    erlang:get_module_info(Mod1, exports) --
+        [{module_info, 0},
+         {module_info, 1}].
