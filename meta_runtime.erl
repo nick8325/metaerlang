@@ -24,6 +24,12 @@ make_fun(Mod, Fun, Arity) ->
 'case'(Values, Clauses) ->
     {'case', Values, Clauses}.
 
+'catch'(Expr) ->
+    {'catch', Expr}.
+
+'try'(Expr, Success, Failure) ->
+    {'try', Expr, Success, Failure}.
+
 clause(Patts, Guard, Body) ->
     {clause, Patts, Guard, Body}.
 

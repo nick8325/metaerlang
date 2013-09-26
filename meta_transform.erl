@@ -6,6 +6,8 @@
                c_int/1,
                c_atom/1, atom_val/1,
                c_var/1, var_name/1,
+               c_catch/1, catch_body/1,
+               try_arg/1, try_body/1, try_vars/1, try_evars/1, try_handler/1,
                c_tuple/1, tuple_es/1,
                make_list/1, list_elements/1, c_cons/2,
                alias_var/1, alias_pat/1,
@@ -260,6 +262,15 @@ make_symbolic(var, Var) ->
         _ ->
             Var
     end;
+make_symbolic('catch', Catch) ->
+    runtime('catch', [Catch]);
+make_symbolic('try', Try) ->
+    runtime('try',
+            [try_arg(Try),
+             bind(try_vars(Try),
+                  c_tuple([make_list(try_vars(Try)), try_body(Try)])),
+             bind(try_evars(Try),
+                  c_tuple([make_list(try_evars(Try)), try_handler(Try)]))]);
 make_symbolic('case', Case) ->
     runtime('case',
             [make_list(values_to_list(case_arg(Case))),
@@ -267,8 +278,7 @@ make_symbolic('case', Case) ->
 make_symbolic(clause, Clause) ->
     %% Instantiate the variables in the clause's pattern.
     Vars = clause_vars(Clause),
-    c_let(Vars,
-          c_values([ runtime(new_var, []) || _ <- Vars ]),
+    bind(Vars,
           runtime(clause, [make_list(clause_pats(Clause)),
                            clause_guard(Clause),
                            c_fun([], clause_body(Clause))]));
@@ -281,8 +291,13 @@ make_symbolic(Type, Expr) when
 make_symbolic(_, Expr) ->
     runtime(unknown, [c_atom(type(Expr))]).
 
-%% Missing: binary bitstr catch letrec module receive try
-%% (relevant: binary bitstr catch try)
+bind(Vars, Expr) ->
+    c_let(Vars,
+          c_values([ runtime(new_var, []) || _ <- Vars ]),
+          Expr).
+
+%% Missing: binary bitstr letrec module receive
+%% (relevant: binary bitstr)
 
 values_to_list(Expr) ->
     case type(Expr) of
