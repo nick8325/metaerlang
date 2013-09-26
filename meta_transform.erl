@@ -1,4 +1,4 @@
--module(symbolic).
+-module(meta_transform).
 -compile(export_all).
 
 -import(cerl, [type/1, meta/1, abstract/1,
@@ -23,121 +23,140 @@
                module_name/1, module_defs/1, module_attrs/1, module_exports/1]).
 -import(cerl_trees, [label/1, get_label/1, free_variables/1]).
 
-recompile() ->
-    Files = [symbolic, symbolic_runtime, cerl_extra,
-             'symbolic!erlang', 'symbolic!lists', 'symbolic!lists_impl'],
-    [ begin compile:file(File), code:load_file(File) end || File <- Files ],
+core_transform(Mod, Opts) ->
+    save_process_dict(),
+
+    Name =
+        proplists:get_value(real_name, Opts,
+                            atom_val(module_name(Mod))),
+
+    put(module_name, Name),
+    put(fresh_name, 0),
+
+    Mod1 = to_symbolic(Mod, Opts),
+    trace(symbolic2, Mod1, Opts),
+
+    %% Rename the module.
+    Mod2 =
+        update_c_module(Mod1,
+                        c_atom(meta_module_name(Name)),
+                        module_exports(Mod1),
+                        module_attrs(Mod1),
+                        module_defs(Mod1)),
+    trace(renamed, Mod2, Opts),
+
+    restore_process_dict(),
+    Mod2.
+
+meta_module_name(Mod) ->
+    list_to_atom("!" ++ atom_to_list(Mod)).
+
+save_process_dict() ->
+    put(old_process_dict, erase()),
+    ok.
+restore_process_dict() ->
+    [ put(K, V) || {K, V} <- get(old_process_dict) ],
     ok.
 
-c(Mod) ->
-    c(Mod, []).
-c(Mod, Opts) ->
-    Opts1 = [{core_transform, symbolic}, no_error_module_mismatch, binary
-            | Opts],
-    {ok, Mod, Bin} = compile:file(Mod, Opts1),
-    Mod1 = symbolic_runtime:module_name(Mod),
-    code:load_binary(Mod1, Mod1, Bin).
-
-core_transform(Mod, Opts) ->
-    Name = atom_val(module_name(Mod)),
-    OldName = put(module_name, Name),
-    NewName = c_atom(symbolic_runtime:module_name(Name)),
-    Mod1 =
-        case lists:member(no_error_module_mismatch, Opts) of
-            true ->
-                update_c_module(Mod, NewName, module_exports(Mod),
-                                module_attrs(Mod), module_defs(Mod));
-            false ->
-                Mod
-        end,
-    {Mod2, _} = label(Mod1),
-    Mod3 = to_symbolic(Mod2),
-    put(module_name, OldName),
-    Mod3.
-
-to_symbolic(Mod) ->
-    Mod1 = core_to_core_pass(fun alpha_rename/1, Mod),
-    Mod2 = definitions_pass(fun lambda_lift_letrec/1, Mod1),
-    Mod3 = definitions_pass(fun lambda_lift/1, Mod2),
-    Mod4 = definitions_pass(fun make_symbolic/1, Mod3),
+to_symbolic(Mod, Opts) ->
+    Mod1 = alpha_rename(Mod),
+    trace(alpha_rename, Mod1, Opts),
+    Mod2 = pass(fun lambda_lift_letrec/1, Mod1, Opts),
+    trace(lambda_lift_letrec, Mod2, Opts),
+    Mod3 = pass(fun lambda_lift/1, Mod2, Opts),
+    trace(lambda_lift, Mod3, Opts),
+    Mod4 = pass(fun make_symbolic/1, Mod3, Opts),
+    trace(symbolic, Mod4, Opts),
     export_all(Mod4).
 
-export_all(Mod) ->
-    update_c_module(Mod, module_name(Mod),
-                    [Name || {Name, _} <- module_defs(Mod)],
-                    module_attrs(Mod), module_defs(Mod)).
+trace(Pass, Mod, Opts) ->
+    case lists:member({trace, Pass}, Opts) of
+        true ->
+            io:format("After pass ~p:~n", [Pass]),
+            pretty_print(Mod),
+            io:format("~n");
+        false ->
+            ok
+    end.
 
 pretty_print(Mod) ->
     io:format("~s~n", [core_pp:format(clear_anns(Mod))]).
 
+%% Hack: core_pp:format crashes on labelled syntax trees.
 clear_anns(Exp) ->
     cerl_trees:map(fun clear_ann/1, Exp).
 clear_ann(Exp) ->
     set_ann(Exp, []).
 
-%% Passes. A pass is something that transforms the core
+%% Passes. A pass is something that transforms each definition.
 %% while perhaps emitting new definitions.
-pass(Fun, Mod) ->
-    Defs = module_defs(Mod),
-
-    OldDefs = put(defs, []),
-    Fun(Defs),
-    NewDefs = get(defs),
-    put(defs, OldDefs),
-    NewDefs.
-
-%% A pass that returns a core module.
-core_to_core_pass(Fun, Mod) ->
-    Fun1 = fun(Defs) ->
-        Res = Fun(Defs),
-        put(defs, Res ++ get(defs))
-    end,
-    NewDefs = pass(Fun1, Mod),
+pass(Fun, Mod, Opts) ->
+    put(defs, []),
+    Res = [{Name, pass_def(Fun, Name, Body, Opts)}
+           || {Name, Body} <- module_defs(Mod)],
     update_c_module(Mod, module_name(Mod), module_exports(Mod),
-                    module_attrs(Mod), NewDefs).
-
-%% A pass that acts on each definition separately.
-definitions_pass(Fun, Mod) ->
-    core_to_core_pass(fun(Defs) ->
-        [ {Name, Fun(Body)} || {Name, Body} <- Defs ]
-    end, Mod).
+                    module_attrs(Mod),
+                    Res ++ get(defs)).
+pass_def(Fun, Name, Body, Opts) ->
+    case lists:member({symbolic, var_name(Name)}, Opts) of
+        true ->
+            Body;
+        false ->
+            Fun(Body)
+    end.
 
 %% Emit a new function.
 emit(Name, Fun) ->
     put(defs, [{Name, Fun}|get(defs)]).
 
-%% Mapping over expressions.
+%% Mapping over expressions while matching on their type.
 map_with_type(Fun, Expr) ->
     cerl_trees:map(fun(E) -> Fun(type(E), E) end, Expr).
 map_bottom_up_with_type(Fun, Expr) ->
     cerl_extra:map_bottom_up(fun(E) -> Fun(type(E), E) end, Expr).
 
-%% Fresh name generation from labels.
-fresh_name(Exp) ->
-    list_to_atom("var!" ++ integer_to_list(get_label(Exp))).
+%% Generate a fresh name.
+fresh_name() ->
+    N = get(fresh_name),
+    put(fresh_name, N+1),
+    list_to_atom("v!" ++ integer_to_list(N)).
 
 %% Alpha-rename all local names so they're unique.
-alpha_rename(Defs) ->
-    Globals = gb_sets:from_list([ var_name(Name) || {Name, _} <- Defs ]),
-    Rename = fun(Type, Expr) ->
-                     alpha_rename(Globals, Type, Expr)
-             end,
-    [ {Rename(var, Name), map_with_type(Rename, Body)}
-      || {Name, Body} <- Defs ].
-
-alpha_rename(Globals, var, Var) ->
+alpha_rename(Mod) ->
     %% Quoth the manual:
     %% "[the label] is a unique number for every node, except for
     %%  variables (and function name variables) which get the same
     %%  label if they represent the same variable."
-    %% Thus, we can just generate a name based on the variable's label.
-    case gb_sets:is_member(var_name(Var), Globals) of
-        true ->
+    %% Thus, we label the module, collect all variable labels,
+    %% and then generate a substitution from *labels* to variables.
+
+    {Mod1, _} = label(Mod),
+    Exports = gb_sets:from_list(
+                [ get_label(Name) || Name <- module_exports(Mod1) ]),
+
+    Labels = cerl_trees:fold(fun collect_labels/2, gb_sets:new(), Mod1),
+    Subst = gb_trees:from_orddict(
+              orddict:from_list(
+                [ {Label, fresh_name()}
+                  || Label <- gb_sets:to_list(Labels),
+                     not gb_sets:is_member(Label, Exports)])),
+    map_with_type(fun(Type, E) -> subst_label(Subst, Type, E) end, Mod1).
+
+collect_labels(Exp, Labels) ->
+    collect_labels(type(Exp), Exp, Labels).
+collect_labels(var, Exp, Labels) ->
+    gb_sets:add(get_label(Exp), Labels);
+collect_labels(_, _, Labels) ->
+    Labels.
+
+subst_label(Subst, var, Var) ->
+    case gb_trees:lookup(get_label(Var), Subst) of
+        none ->
             Var;
-        false ->
-            c_var(rename(fresh_name(Var), var_name(Var)))
+        {value, Name} ->
+            c_var(rename(Name, var_name(Var)))
     end;
-alpha_rename(_, _, Expr) ->
+subst_label(_, _, Expr) ->
     Expr.
 
 rename(Name, {_, Arity}) ->
@@ -181,7 +200,8 @@ bump_arity(N, Name) ->
     {Fun, Arity} = var_name(Name),
     c_var({Fun, N + Arity}).
 
-%% This substitution function assumes there are no name clashes.
+%% This substitution function assumes there are no name clashes
+%% (as guaranteed by alpha_rename/1).
 subst(Subst, Expr) ->
     map_with_type(fun(Type, E) -> subst(Subst, Type, E) end, Expr).
 subst(Subst, var, Var) ->
@@ -193,9 +213,14 @@ subst(_, _, Expr) ->
     Expr.
 
 %% Generate a call to a runtime function.
--define(RUNTIME, symbolic_runtime).
+runtime_key() ->
+    '!runtime'.
+runtime() ->
+    c_call(c_atom(erlang), c_atom(get), [c_atom(runtime_key())]).
 runtime(Fun, Args) ->
-    c_call(c_atom(?RUNTIME), c_atom(Fun), Args).
+    Runtime = c_var(fresh_name()),
+    c_let([Runtime], runtime(),
+          c_call(Runtime, c_atom(Fun), Args)).
 
 %% Generate a call to the partial application "primop".
 partial_application(Fun, []) ->
@@ -210,7 +235,7 @@ lambda_lift(Fun) ->
                  map_with_type(fun lambda_lift/2, fun_body(Fun))).
 lambda_lift('fun', Fun) ->
     %% Reduce to letrec.
-    Name = c_var({fresh_name(Fun), fun_arity(Fun)}),
+    Name = c_var({fresh_name(), fun_arity(Fun)}),
     do_lambda_lift_letrec([{Name, Fun}], Name);
 lambda_lift(_, Expr) ->
     Expr.
@@ -254,7 +279,7 @@ make_symbolic(Type, Expr) when
       Type == 'fun' ->
     Expr;
 make_symbolic(_, Expr) ->
-    runtime(unknown, [meta(Expr)]).
+    runtime(unknown, [c_atom(type(Expr))]).
 
 %% Missing: binary bitstr catch letrec module receive try
 %% (relevant: binary bitstr catch try)
@@ -266,3 +291,9 @@ values_to_list(Expr) ->
         _ ->
             [Expr]
     end.
+
+%% Export all functions from a module.
+export_all(Mod) ->
+    update_c_module(Mod, module_name(Mod),
+                    [Name || {Name, _} <- module_defs(Mod)],
+                    module_attrs(Mod), module_defs(Mod)).

@@ -1,6 +1,5 @@
--module('symbolic!lists_impl').
+-module(std_lists).
 -compile(export_all).
--compile({core_transform, symbolic}).
 
 seq(M, N) when is_integer(M), is_integer(N), M >= N ->
     [];
