@@ -72,7 +72,8 @@ to_symbolic(Mod, Opts) ->
     export_all(Mod4).
 
 trace(Pass, Mod, Opts) ->
-    case lists:member({trace, Pass}, Opts) of
+    case lists:member({trace, Pass}, Opts)
+        orelse lists:member(trace, Opts) of
         true ->
             io:format("After pass ~p:~n", [Pass]),
             pretty_print(Mod),
