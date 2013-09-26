@@ -2,7 +2,7 @@
 -export([start/0, start_1/0, c/1, c/2, apply/4, exports/1]).
 
 base() ->
-    [meta_transform, meta_runtime, cerl_extra].
+    [meta_transform, meta_runtime, cerl_extra, prolog].
 builtins() ->
     [erlang, lists].
 

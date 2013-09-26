@@ -14,7 +14,7 @@ apply({thunk, Fun, Args}, Args2) ->
     apply(Fun, Args ++ Args2);
 apply({'fun', M, F, A}, Args) ->
     case A == length(Args) of
-        true -> meta:apply(?MODULE, M, F, Args);
+        true -> {apply, M, F, Args};
         false -> failure()
     end.
 
