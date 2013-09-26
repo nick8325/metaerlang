@@ -16,9 +16,11 @@ ensure_loaded() ->
         lists:map(fun meta_transform:meta_module_name/1, builtins()),
     all_modules(Mods, fun ensure_loaded/1).
 ensure_loaded(Mod) ->
+    ensure_loaded(Mod, meta_not_started).
+ensure_loaded(Mod, Error) ->
     case code:ensure_loaded(Mod) of
         {error, _} ->
-            error(meta_not_started);
+            error(Error);
         _ ->
             ok
     end.
@@ -57,7 +59,8 @@ compile(Mod, Opts) ->
             Mod1 = meta_transform:meta_module_name(
                   proplists:get_value(real_name, Opts, Mod)),
             code:purge(Mod1),
-            code:load_binary(Mod1, Mod1, Bin);
+            code:load_binary(Mod1, Mod1, Bin),
+            ok;
         error ->
             error
     end.
@@ -76,6 +79,7 @@ apply(Runtime, Mod, Fun, Args) ->
 
 exports(Mod) ->
     Mod1 = meta_transform:meta_module_name(Mod),
+    ensure_loaded(Mod1, {module_not_loaded, Mod}),
     erlang:get_module_info(Mod1, exports) --
         [{module_info, 0},
          {module_info, 1}].
