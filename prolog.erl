@@ -105,7 +105,7 @@ expr(Exp, _Res) ->
     fail.
 
 clauses(Vars, Clauses, Res) ->
-    clauses(Vars, Clauses, Res, true).
+    clauses(Vars, Clauses, Res, seq([])).
 clauses(_, [], _, _) ->
     [];
 clauses(Vars, [{clause, Patts, Guard, Body}|Clauses], Res, Failed) ->
@@ -143,11 +143,27 @@ guard(_, _, _, Guard) ->
     fail.
 
 choice(Xs) ->
-    {choice, Xs}.
+    smart(choice, seq, Xs).
 unify(X, Y) ->
     {unify, X, Y}.
 seq(Xs) ->
-    {seq, Xs}.
+    smart(seq, choice, Xs).
+
+smart(Op, CoOp, Xs) ->
+    Ys = lists:concat([ flatten(Op, X) || X <- Xs ]),
+    sequence(Op, CoOp, Ys, []).
+
+flatten(Op, {Op, Xs}) ->
+    Xs;
+flatten(_, X) ->
+    [X].
+
+sequence(Op, _, [], Ys) ->
+    {Op, lists:reverse(Ys)};
+sequence(_, CoOp, [{CoOp, []}|_], _) ->
+    {CoOp, []};
+sequence(Op, CoOp, [X|Xs], Ys) ->
+    sequence(Op, CoOp, Xs, [X|Ys]).
 
 test() ->
     meta:c(test),
