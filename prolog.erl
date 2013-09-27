@@ -4,22 +4,22 @@
 
 translate(Mod) ->
     Clauses =
-    lists:concat(
+    lists:flatten(
     [ translate(Mod, Fun, Arity)
       || {Fun, Arity} <- meta:exports(Mod) ]),
-    
-    [ ":- use_module(prelude, [apply/4, noteq/2]).\n",
-      ":- assert(prelude:is_module(", atom_to_list(Mod), ")).\n",
-      pretty(Clauses) ].
+
+    [":- use_module(prelude).\n",
+     ":- new_module(" ++ atom_to_list(Mod), ", apply).\n\n",
+     pretty(Clauses) ].
 
 pretty(Clauses) ->
     lists:map(fun pretty_clause/1, Clauses).
-pretty_clause({Name, Args, Body}) ->
+pretty_clause({assert, Name, Args, Body}) ->
     put(vars, gb_trees:empty()),
     put(id, 0),
     [ "'", atom_to_list(Name), "'",
       brack(comma(lists:map(fun pretty_exp/1, Args))), " :-\n",
-      pretty_exp(Body), ".\n" ].
+      pretty_exp(Body), ".\n\n" ].
 
 pretty_exp({seq, []}) ->
     "true";
@@ -77,9 +77,15 @@ translate(Mod, Fun, Arity) ->
                io_lib:format("~p:~p/~p", [Mod, Fun, Arity]))),
     Exp = meta:apply(meta_runtime, Mod, Fun, Vars),
     {Res, Clause} = expr(Exp),
-    [ {Name, [Res|Vars], Clause},
-      {apply, [Fun, Res, Vars],
-       {call, Name, [Res|Vars]}} ].
+    [ assert(Name, [Res|Vars], Clause),
+      assert(apply, [Fun, Res, Vars],
+             {call, Name, [Res|Vars]}) ].
+
+assert(Name, Vars, {choice, Xs}) ->
+    [assert(Name, Vars, X) || X <- Xs];
+assert(Name, Vars, E) ->
+    {assert, Name, Vars, E}.
+
 
 expr(Exp) ->
     expr(Exp, meta_runtime:new_var()).
@@ -106,14 +112,18 @@ exprs(Exps) ->
     {Res, Clauses} = lists:unzip(lists:map(fun expr/1, Exps)),
     {Res, seq(Clauses)}.
 
-clauses(_, [], _) ->
+clauses(Vars, Clauses, Res) ->
+    clauses(Vars, Clauses, Res, true()).
+clauses(_, [], _, _) ->
     false();
-clauses(Vars, [{clause, Patts, Guard, Body}|Clauses], Res) ->
+clauses(Vars, [{clause, Patts, Guard, Body}|Clauses], Res, PrevGuard) ->
     {Res1, Expr} = expr(Body(), Res),
-    choice([match(Vars, Patts, guard(Guard), seq([Expr, unify(Res, Res1)])),
-            seq([choice([invert_match(match(Vars, Patts, true(), true())),
-                         match(Vars, Patts, invert_match(guard(Guard)), true())]),
-                 clauses(Vars, Clauses, Res)])]).
+    NextGuard = seq([guard(Guard),
+                     choice([invert_match(fun not_unifiable/2,
+                                          match(Vars, Patts, true(), true())),
+                             match(Vars, Patts, invert_match(fun separable/2, guard(Guard)), true())])]),
+    choice([match(Vars, Patts, guard(Guard), seq([PrevGuard, Expr, unify(Res, Res1)])),
+            clauses(Vars, Clauses, Res, NextGuard)]).
 
 match(Vars, Patts, Guard, Body) ->
     lists:foldl(fun lett/2, seq([Guard, Body]),
@@ -141,18 +151,23 @@ subst(X, T, X) ->
 subst(_, _, T) ->
     T.
 
-invert_match({seq, Xs}) ->
-    choice(lists:map(fun invert_match/1, Xs));
-invert_match({choice, Xs}) ->
-    seq(lists:map(fun invert_match/1, Xs));
-invert_match({unify, X, Y}) ->
-    disunify(X, Y).
+invert_match(Disunify, {seq, Xs}) ->
+    choice([ invert_match(Disunify, X) || X <- Xs ]);
+invert_match(Disunify, {choice, Xs}) ->
+    seq([ invert_match(Disunify, X) || X <- Xs ]);
+invert_match(Disunify, {unify, X, Y}) ->
+    Disunify(X, Y).
 
-disunify(X, Y) ->
+separable(X, Y) ->
     {V1, C1} = expr(X),
     {V2, C2} = expr(Y),
     seq(
       [ C1, C2, {call, noteq, [V1, V2]} ]).
+not_unifiable(X, Y) ->
+    {V1, C1} = expr(X),
+    {V2, C2} = expr(Y),
+    seq(
+      [ C1, C2, {call, not_unifiable, [V1, V2]} ]).
 
 guard(true) ->
     true();

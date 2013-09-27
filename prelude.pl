@@ -1,10 +1,17 @@
-:- module(prelude, [is_module/1, apply/4, noteq/2]).
+:- module(prelude, [new_module/2, apply/4, noteq/2, not_unifiable/2]).
 
-:- dynamic(is_module/1).
+:- dynamic(is_module/2).
+
+:- meta_predicate new_module(?, :).
+new_module(Mod, Apply) :-
+    assertz(is_module(Mod, Apply)).
 
 apply(Mod, Fun, Res, Args) :-
-    is_module(Mod),
-    Mod:apply(Fun, Res, Args).
+    is_module(Mod, Apply),
+    call(Apply, Fun, Res, Args).
+
+not_unifiable(X, Y) :-
+    \+ X = Y.
 
 noteq(X, Y) :-
     nonvar(X), nonvar(Y), !,
