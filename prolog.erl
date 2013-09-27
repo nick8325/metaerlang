@@ -120,7 +120,6 @@ match(Vars, Patts, Guard, Body) ->
                     lists:zip(Patts, Vars)).
 
 lett({X={var, _}, T}, U) ->
-    io:format("~p ~p ~p -> ~p~n", [X, T, U, subst(X, T, U)]),
     subst(X, T, U);
 lett({T, U}, V) ->
     seq([unify(T, U), V]).
@@ -193,7 +192,7 @@ sequence(_, _, [], [X]) ->
     X;
 sequence(Op, _, [], Ys) ->
     {Op, lists:reverse(Ys)};
-sequence(Op, CoOp, [T={CoOp, []}|_], Ys) ->
+sequence(_, CoOp, [{CoOp, []}|_], _) ->
     {CoOp, []};
 sequence(Op, CoOp, [X|Xs], Ys) ->
     sequence(Op, CoOp, Xs, [X|Ys]).
