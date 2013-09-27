@@ -18,31 +18,32 @@ pretty_clause({Name, Args, Body}) ->
     put(vars, gb_trees:empty()),
     put(id, 0),
     [ "'", atom_to_list(Name), "'",
-      brack(comma(lists:map(fun show_var/1, Args))), " :-\n",
+      brack(comma(lists:map(fun pretty_exp/1, Args))), " :-\n",
       pretty_exp(Body), ".\n" ].
+
+pretty_exp({seq, []}) ->
+    "true";
+pretty_exp({seq, Xs}) ->
+    brack(comma(lists:map(fun pretty_exp/1, Xs)));
 pretty_exp({choice, []}) ->
     "fail";
 pretty_exp({choice, Xs}) ->
     brack(semicolon(lists:map(fun pretty_exp/1, Xs)));
 pretty_exp({unify, X, Y}) ->
     brack([ pretty_exp(X), " = ", pretty_exp(Y) ]);
-pretty_exp(true) ->
-    "true";
-pretty_exp(fail) ->
-    "fail";
 pretty_exp({call, Fun, Args}) ->
     [ "'", atom_to_list(Fun), "'",
       brack(comma(lists:map(fun pretty_exp/1, Args))) ];
-pretty_exp({seq, []}) ->
-    "true";
-pretty_exp({seq, Xs}) ->
-    brack(comma(lists:map(fun pretty_exp/1, Xs)));
 pretty_exp(Var={var, _}) ->
     show_var(Var);
 pretty_exp(N) when is_integer(N) ->
     integer_to_list(N);
 pretty_exp(X) when is_atom(X) ->
     "'" ++ atom_to_list(X) ++ "'";
+pretty_exp({functor, F, []}) ->
+    pretty_exp(F);
+pretty_exp({functor, F, Args}) ->
+    [pretty_exp(F), brack(comma(lists:map(fun pretty_exp/1, Args)))];
 pretty_exp([]) ->
     "[]";
 pretty_exp([X|Xs]) ->
@@ -72,82 +73,111 @@ sep(S, [X|Xs]) ->
 
 translate(Mod, Fun, Arity) ->
     Vars = [meta_runtime:new_var() || _ <- lists:seq(1, Arity)],
-    Res = meta_runtime:new_var(),
     Name = list_to_atom(lists:flatten(
                io_lib:format("~p:~p/~p", [Mod, Fun, Arity]))),
     Exp = meta:apply(meta_runtime, Mod, Fun, Vars),
-    FVar = meta_runtime:new_var(),
-    VVar = meta_runtime:new_var(),
-    [ {Name, [Res|Vars], expr(Exp, Res)},
-      {apply, [FVar, Res, VVar],
-       seq(
-         [ unify(Fun, FVar),
-           unify(Vars, VVar),
-           {call, Name, [Res|Vars]} ])} ].
+    {Res, Clause} = expr(Exp),
+    [ {Name, [Res|Vars], Clause},
+      {apply, [Fun, Res, Vars],
+       {call, Name, [Res|Vars]}} ].
+
+expr(Exp) ->
+    expr(Exp, meta_runtime:new_var()).
 
 expr({'case', Vars, Clauses}, Res) ->
-    choice(clauses(Vars, Clauses, Res));
-expr(Lit, Res) when is_integer(Lit); is_atom(Lit); is_list(Lit) ->
-    unify(Lit, Res);
-expr(Var={var,_}, Res) ->
-    unify(Var, Res);
-expr({failure}, _) ->
-    fail;
+    {Res, clauses(Vars, Clauses, Res)};
+expr(Lit, _) when is_integer(Lit); is_atom(Lit); is_list(Lit) ->
+    {Lit, true()};
+expr(Var={var,_}, _) ->
+    {Var, true()};
+expr({failure}, Res) ->
+    {Res, false()};
 expr({apply, Mod, Fun, Args}, Res) ->
-    {call, apply, [Mod, Fun, Res, Args]};
-expr({tuple, Tuple}, Res) ->
-    Vars = [meta_runtime:new_var() || _ <- lists:seq(1, length(Tuple))],
-    seq(
-     [ unify(Elem, Var) || {Elem, Var} <- lists:zip(Tuple, Vars) ] ++
-     [ {call, tuple, [Res, Vars]} ]);
-expr(Exp, _Res) ->
+    {VArgs, Clause} = exprs(Args),
+    {Res, seq([Clause, {call, apply, [Mod, Fun, Res, VArgs]}])};
+expr({tuple, Tuple}, _) ->
+    {Res, Clause} = exprs(Tuple),
+    {{functor, tuple, Res}, Clause};
+expr(Exp, _) ->
     io:format("*** Unknown expression ~p~n", [Exp]),
-    fail.
+    false().
 
-clauses(Vars, Clauses, Res) ->
-    clauses(Vars, Clauses, Res, seq([])).
-clauses(_, [], _, _) ->
-    [];
-clauses(Vars, [{clause, Patts, Guard, Body}|Clauses], Res, Failed) ->
-    Match = match_clause(fun seq/1, fun choice/1, fun unify/2, Vars, Patts, Guard),
-    NotMatch = match_clause(fun choice/1, fun seq/1, fun disunify/2, Vars, Patts, Guard),
-    [ seq([Failed, Match, expr(Body(), Res)])
-    | clauses(Vars, Clauses, Res, seq([Failed, NotMatch])) ].
+exprs(Exps) ->
+    {Res, Clauses} = lists:unzip(lists:map(fun expr/1, Exps)),
+    {Res, seq(Clauses)}.
+
+clauses(_, [], _) ->
+    false();
+clauses(Vars, [{clause, Patts, Guard, Body}|Clauses], Res) ->
+    {Res1, Expr} = expr(Body(), Res),
+    choice([match(Vars, Patts, guard(Guard), seq([Expr, unify(Res, Res1)])),
+            seq([invert_match(match(Vars, Patts, guard(Guard), true())),
+                 clauses(Vars, Clauses, Res)])]).
+
+match(Vars, Patts, Guard, Body) ->
+    lists:foldl(fun lett/2, seq([Guard, Body]),
+                    lists:zip(Patts, Vars)).
+
+lett({X={var, _}, T}, U) ->
+    io:format("~p ~p ~p -> ~p~n", [X, T, U, subst(X, T, U)]),
+    subst(X, T, U);
+lett({T, U}, V) ->
+    seq([unify(T, U), V]).
+
+subst(X, T, {seq, Xs}) ->
+    seq(subst(X, T, Xs));
+subst(X, T, {choice, Xs}) ->
+    choice(subst(X, T, Xs));
+subst(X, T, {unify, U, V}) ->
+    {unify, subst(X, T, U), subst(X, T, V)};
+subst(X, T, {call, F, Args}) ->
+    {call, F, subst(X, T, Args)};
+subst(X, T, {functor, F, Args}) ->
+    {functor, F, subst(X, T, Args)};
+subst(X, T, [U|Us]) ->
+    [subst(X, T, U)|subst(X, T, Us)];
+subst(X, T, X) ->
+    T;
+subst(_, _, T) ->
+    T.
+
+invert_match({seq, Xs}) ->
+    choice(lists:map(fun invert_match/1, Xs));
+invert_match({choice, Xs}) ->
+    seq(lists:map(fun invert_match/1, Xs));
+invert_match({unify, X, Y}) ->
+    disunify(X, Y).
 
 disunify(X, Y) ->
-    V1 = meta_runtime:new_var(),
-    V2 = meta_runtime:new_var(),
+    {V1, C1} = expr(X),
+    {V2, C2} = expr(Y),
     seq(
-      [ expr(X, V1),
-        expr(Y, V2),
-        {call, noteq, [V1, V2]} ]).
+      [ C1, C2, {call, noteq, [V1, V2]} ]).
 
-match_clause(Seq, Choice, Unify, Vars, Patts, Guard) ->
-    Seq(
-     [ Unify(X, Y) || {X, Y} <- lists:zip(Vars, Patts) ] ++
-     [ guard(Seq, Choice, Unify, Guard) ]).
-
-guard(Seq, _Choice, _Unify, true) ->
-    Seq([]);
-guard(_Seq, Choice, _Unify, false) ->
-    Choice([]);
-guard(Seq, _Choice, Unify, {apply, erlang, '=:=', [X, Y]}) ->
-    V1 = meta_runtime:new_var(),
-    V2 = meta_runtime:new_var(),
-    Seq(
-     [ expr(X, V1),
-       expr(Y, V2),
-       Unify(V1, V2) ]);
-guard(_, _, _, Guard) ->
+guard(true) ->
+    true();
+guard(false) ->
+    false();
+guard({apply, erlang, '=:=', [X, Y]}) ->
+    {V1, C1} = expr(X),
+    {V2, C2} = expr(Y),
+    seq([ C1, C2, unify(V1, V2)]);
+guard(Guard) ->
     io:format("*** Unknown guard ~p~n", [Guard]),
-    fail.
+    false().
 
-choice(Xs) ->
-    smart(choice, seq, Xs).
-unify(X, Y) ->
-    {unify, X, Y}.
+true() ->
+    seq([]).
 seq(Xs) ->
     smart(seq, choice, Xs).
+false() ->
+    choice([]).
+choice(Xs) ->
+    smart(choice, seq, Xs).
+unify(X, X) ->
+    true();
+unify(X, Y) ->
+    {unify, X, Y}.
 
 smart(Op, CoOp, Xs) ->
     Ys = lists:concat([ flatten(Op, X) || X <- Xs ]),
@@ -158,9 +188,11 @@ flatten(Op, {Op, Xs}) ->
 flatten(_, X) ->
     [X].
 
+sequence(_, _, [], [X]) ->
+    X;
 sequence(Op, _, [], Ys) ->
     {Op, lists:reverse(Ys)};
-sequence(_, CoOp, [{CoOp, []}|_], _) ->
+sequence(Op, CoOp, [T={CoOp, []}|_], Ys) ->
     {CoOp, []};
 sequence(Op, CoOp, [X|Xs], Ys) ->
     sequence(Op, CoOp, Xs, [X|Ys]).
