@@ -111,7 +111,8 @@ clauses(_, [], _) ->
 clauses(Vars, [{clause, Patts, Guard, Body}|Clauses], Res) ->
     {Res1, Expr} = expr(Body(), Res),
     choice([match(Vars, Patts, guard(Guard), seq([Expr, unify(Res, Res1)])),
-            seq([invert_match(match(Vars, Patts, guard(Guard), true())),
+            seq([choice([invert_match(match(Vars, Patts, true(), true())),
+                         match(Vars, Patts, invert_match(guard(Guard)), true())]),
                  clauses(Vars, Clauses, Res)])]).
 
 match(Vars, Patts, Guard, Body) ->
