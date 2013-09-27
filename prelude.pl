@@ -1,4 +1,4 @@
-:- module(prelude, [new_module/2, apply/4, noteq/2, not_unifiable/2]).
+:- module(prelude, [new_module/2, apply/4, noteq/2, not_unifiable/2, solve/1]).
 
 :- dynamic(is_module/2).
 
@@ -81,3 +81,22 @@ goals_list(_X,[]) -->
 goals_list(X,[Y|Ys]) -->
     [X \= Y],
     goals_list(X, Ys).
+
+solve(Goal) :-
+    call(Goal),
+    instantiate(Goal).
+
+instantiate(apply(_, _, Res, Args)) :-
+    %% Only one solution.
+    term([Res|Args]),
+    !.
+
+term(a).
+term(b).
+term(0).
+term(1).
+term(true).
+term(false).
+term([]).
+term([X|Xs]) :- term(X), term(Xs).
+term(tuple(Xs)) :- term(Xs).
