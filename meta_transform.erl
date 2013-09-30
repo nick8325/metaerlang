@@ -115,8 +115,8 @@ emit(Name, Fun) ->
 %% Mapping over expressions while matching on their type.
 map_with_type(Fun, Expr) ->
     cerl_trees:map(fun(E) -> Fun(type(E), E) end, Expr).
-map_bottom_up_with_type(Fun, Expr) ->
-    cerl_extra:map_bottom_up(fun(E) -> Fun(type(E), E) end, Expr).
+map_top_down_with_type(Fun, Expr) ->
+    cerl_extra:map_top_down(fun(E) -> Fun(type(E), E) end, Expr).
 
 %% Generate a fresh name.
 fresh_name() ->
@@ -169,7 +169,7 @@ rename(Name, _) ->
 
 %% Lambda-lift all functions defined in letrecs.
 lambda_lift_letrec(Expr) ->
-    map_bottom_up_with_type(fun lambda_lift_letrec/2, Expr).
+    map_top_down_with_type(fun lambda_lift_letrec/2, Expr).
 lambda_lift_letrec(letrec, LetRec) ->
     Defs = letrec_defs(LetRec),
     Body = letrec_body(LetRec),

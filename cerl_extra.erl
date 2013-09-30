@@ -18,7 +18,7 @@
 
 -module(cerl_extra).
 
--export([map_bottom_up/2]).
+-export([map_top_down/2]).
 
 -import(cerl, [alias_pat/1, alias_var/1, ann_c_alias/3, ann_c_apply/3,
 	       ann_c_binary/2, ann_c_bitstr/6, ann_c_call/4,
@@ -54,9 +54,9 @@
 
 %% Like cerl_trees:map/2, but top-down.
 
--spec map_bottom_up(fun((cerl:cerl()) -> cerl:cerl()), cerl:cerl()) -> cerl:cerl().
+-spec map_top_down(fun((cerl:cerl()) -> cerl:cerl()), cerl:cerl()) -> cerl:cerl().
 
-map_bottom_up(F, T) ->
+map_top_down(F, T) ->
     map(F, T).
 
 map(F, T) ->
