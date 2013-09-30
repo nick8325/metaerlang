@@ -15,14 +15,13 @@ translate(Mod) ->
       || {Fun, Arity} <- meta:exports(Mod) ]),
 
     [":- use_module(prelude).\n",
-     ":- discontiguous(apply/3).\n",
-     ":- new_module(" ++ atom_to_list(Mod), ", apply).\n\n",
-     "apply(fun(Mod, Fun, Arity), Res, Args) :- \n",
-     "    length(Args, Arity), apply(Mod, Fun, Res, Args).\n\n",
+     "apply_fun(Fun, Res, Args) :- apply_fun(" ++ atom_to_list(Mod) ++ ", Fun, Res, Args).\n\n",
      pretty(Clauses) ].
 
 pretty(Clauses) ->
     lists:map(fun pretty_clause/1, Clauses).
+pretty_clause({goal, Goal}) ->
+    [ ":- ", pretty_exp(Goal), ".\n" ];
 pretty_clause({assert, Name, Args, Body}) ->
     put(vars, gb_trees:empty()),
     put(id, 0),
@@ -87,9 +86,8 @@ translate(Mod, Fun, Arity) ->
                         integer_to_list(Arity)),
     Exp = meta:apply(meta_runtime, Mod, Fun, Vars),
     {Res, Clause} = expr(Exp),
-    [ assert(Name, [Res|Vars], Clause),
-      assert(apply, [Fun, Res, Vars],
-             {call, Name, [Res|Vars]}) ].
+    [ {goal, {call, new_function, [Mod, Fun, Arity, Name]}},
+      assert(Name, [Res|Vars], Clause) ].
 
 assert(Name, Vars, {choice, Xs}) ->
     [assert(Name, Vars, X) || X <- Xs];
@@ -117,7 +115,7 @@ expr({apply, Mod, Fun, Args}, Res) ->
     {Res, seq([Clause, {call, apply, [Mod, Fun, Res, VArgs]}])};
 expr({apply, Fun, Args}, Res) ->
     {VArgs, Clause} = exprs(Args),
-    {Res, seq([Clause, {call, apply, [Fun, Res, VArgs]}])};
+    {Res, seq([Clause, {call, apply_fun, [Fun, Res, VArgs]}])};
 expr({tuple, Tuple}, _) ->
     {Res, Clause} = exprs(Tuple),
     {{functor, tuple, Res}, Clause};
@@ -128,6 +126,9 @@ expr({alias, X1, X2}, Res) ->
 expr({'fun', Mod, Fun, Arity}, _) ->
     {Res, Clause} = exprs([Mod, Fun, Arity]),
     {{functor, 'fun', Res}, Clause};
+expr({thunk, Fun, Args}, _) ->
+    {Res, Clause} = exprs([Fun, Args]),
+    {{functor, thunk, Res}, Clause};
 expr(Exp, _) ->
     io:format("*** Unknown expression ~p~n", [Exp]),
     false().

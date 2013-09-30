@@ -249,8 +249,10 @@ make_symbolic(Expr) ->
 make_symbolic(apply, Apply) ->
     runtime(apply, [apply_op(Apply), make_list(apply_args(Apply))]);
 make_symbolic(call, Call) ->
-    Fun = c_tuple([c_atom(make_fun),
-                   make_list([call_module(Call), call_name(Call), c_int(call_arity(Call))])]),
+    Fun = c_tuple([c_atom('fun'),
+                   call_module(Call),
+                   call_name(Call),
+                   c_int(call_arity(Call))]),
     runtime(apply, [Fun, make_list(call_args(Call))]);
 make_symbolic(tuple, Tuple) ->
     update_c_tuple(Tuple,
@@ -261,8 +263,10 @@ make_symbolic(primop, Primop) ->
 make_symbolic(var, Var) ->
     case var_name(Var) of
         {Fun, Arity} ->
-            c_tuple([c_atom(make_fun),
-                     make_list([c_atom(get(module_name)), c_atom(Fun), c_int(Arity)])]);
+            c_tuple([c_atom('fun'),
+                     c_atom(get(module_name)),
+                     c_atom(Fun),
+                     c_int(Arity)]);
         _ ->
             Var
     end;

@@ -1,14 +1,26 @@
-:- module(prelude, [new_module/2, apply/4, noteq/2, not_unifiable/2, solve/1]).
+:- module(prelude, [new_function/4, apply/4, apply_fun/4, noteq/2, not_unifiable/2, solve/1]).
 
-:- dynamic(is_module/2).
+:- dynamic(is_function/4).
 
-:- meta_predicate new_module(?, :).
-new_module(Mod, Apply) :-
-    assertz(is_module(Mod, Apply)).
+:- meta_predicate new_function(?, ?, ?, :).
+new_function(Mod, Fun, Arity, Apply) :-
+    assertz(is_function(Mod, Fun, Arity, Apply)).
 
 apply(Mod, Fun, Res, Args) :-
-    is_module(Mod, Apply),
-    call(Apply, Fun, Res, Args).
+    is_function(Mod, Fun, Arity, Apply),
+    length(Args, Arity),
+    !,
+    apply(Apply, [Res|Args]).
+apply(Mod, Fun, _, Args) :-
+    length(Args, Arity),
+    format("*** Unknown function ~p:~p/~p", [Mod, Fun, Arity]).
+
+apply_fun(_, fun(Mod, Fun, Arity), Res, Args) :-
+    length(Args, Arity),
+    apply(Mod, Fun, Res, Args).
+apply_fun(Mod, fun(thunk, Fun, Xs), Res, Ys) :-
+    append(Xs, Ys, Zs),
+    apply_fun(Mod, Fun, Res, Zs).
 
 not_unifiable(X, Y) :-
     \+ X = Y.
