@@ -9,7 +9,7 @@ unique_list() ->
     unique_list([]).
 unique_list(Xs) ->
     oneof([[],
-           ?LET(X, ?SUCHTHAT(Y, atom(), not member(Y, Xs)),
+           ?LET(X, ?SUCHTHAT(Y, atom(), not test:member(Y, Xs)),
                [X|unique_list([X|Xs])])]).
 
 list_of(Gen) ->
@@ -21,10 +21,3 @@ atom_list() ->
 
 one_atom_list() ->
     ?LET(X, atom(), list_of(X)).
-
-member(_, []) ->
-    false;
-member(X, [X|_]) ->
-    true;
-member(X, [_|Xs]) ->
-    member(X, Xs).
