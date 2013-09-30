@@ -16,7 +16,9 @@ apply({'fun', M, F, A}, Args) ->
     case A == length(Args) of
         true -> {apply, M, F, Args};
         false -> failure()
-    end.
+    end;
+apply(Fun, Args) ->
+    {apply, Fun, Args}.
 
 make_fun(Mod, Fun, Arity) ->
     {'fun', Mod, Fun, Arity}.
@@ -32,6 +34,9 @@ make_fun(Mod, Fun, Arity) ->
 
 clause(Patts, Guard, Body) ->
     {clause, Patts, Guard, Body}.
+
+alias(X, Y) ->
+    {alias, X, Y}.
 
 tuple(Xs) ->
     {tuple, Xs}.

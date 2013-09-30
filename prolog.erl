@@ -17,6 +17,8 @@ translate(Mod) ->
     [":- use_module(prelude).\n",
      ":- discontiguous(apply/3).\n",
      ":- new_module(" ++ atom_to_list(Mod), ", apply).\n\n",
+     "apply(fun(Mod, Fun, Arity), Res, Args) :- \n",
+     "    length(Args, Arity), apply(Mod, Fun, Res, Args).\n\n",
      pretty(Clauses) ].
 
 pretty(Clauses) ->
@@ -113,9 +115,19 @@ expr({failure}, Res) ->
 expr({apply, Mod, Fun, Args}, Res) ->
     {VArgs, Clause} = exprs(Args),
     {Res, seq([Clause, {call, apply, [Mod, Fun, Res, VArgs]}])};
+expr({apply, Fun, Args}, Res) ->
+    {VArgs, Clause} = exprs(Args),
+    {Res, seq([Clause, {call, apply, [Fun, Res, VArgs]}])};
 expr({tuple, Tuple}, _) ->
     {Res, Clause} = exprs(Tuple),
     {{functor, tuple, Res}, Clause};
+expr({alias, X1, X2}, Res) ->
+    {X1R, X1C} = expr(X1, Res),
+    {X2R, X2C} = expr(X2, Res),
+    {X1R, seq([X1C, X2C, unify(X1R, X2R)])};
+expr({'fun', Mod, Fun, Arity}, _) ->
+    {Res, Clause} = exprs([Mod, Fun, Arity]),
+    {{functor, 'fun', Res}, Clause};
 expr(Exp, _) ->
     io:format("*** Unknown expression ~p~n", [Exp]),
     false().
@@ -144,7 +156,8 @@ match(Vars, Patts, Guard, Body) ->
 lett({X={var, _}, T}, U) ->
     subst(X, T, U);
 lett({T, U}, V) ->
-    seq([unify(T, U), V]).
+    {_, Clause} = expr({alias, T, U}),
+    seq([Clause, V]).
 
 subst(X, T, {seq, Xs}) ->
     seq(subst(X, T, Xs));
