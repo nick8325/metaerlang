@@ -1,3 +1,5 @@
+:- module(eqc_gen, [bind/3, suchthat/3, oneof/2, elements/2, lazy/2,
+          in/2, in/3, prob/3]).
 :- use_module(prelude).
 
 :- new_function(eqc_gen, bind, 2, bind).
@@ -44,6 +46,7 @@ in(X, [Y|Ys], P1*P2) :-
 in(X, X, 1).
 
 prob(X, Gen, P) :-
+    in(X, Gen, _),
     findall(P, in(X, Gen, P), Probs),
     sum(Probs, P).
 sum([], 0).
