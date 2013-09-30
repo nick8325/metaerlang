@@ -4,11 +4,13 @@
 :- new_function(eqc_gen, suchthat, 2, suchthat).
 :- new_function(eqc_gen, oneof, 1, oneof).
 :- new_function(eqc_gen, elements, 1, elements).
+:- new_function(eqc_gen, lazy, 1, lazy).
 
 bind(bind(Gen, F), Gen, F).
 suchthat(suchthat(Gen, P), Gen, P).
 oneof(oneof(Xs), Xs).
 elements(elements(Xs), Xs).
+lazy(lazy(Fun), Fun).
 
 in(X, Gen) :-
     in(X, Gen, _).
@@ -31,6 +33,9 @@ in(X, elements(Xs), 1/N) :-
     !,
     member(X, Xs),
     length(Xs, N).
+in(X, lazy(Fun), P) :-
+    apply_fun(eqc_gen, Fun, Gen, []),
+    in(X, Gen, P).
 in(X, [Y|Ys], P1*P2) :-
     !,
     X = [Z|Zs],
@@ -43,6 +48,5 @@ prob(X, Gen, P) :-
     sum(Probs, P).
 sum([], 0).
 sum([P|Ps], Total) :-
-    N is P,
     sum(Ps, Rest),
-    Total is N + Rest.
+    Total is P + Rest.
