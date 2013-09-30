@@ -5,8 +5,6 @@
 atoms() ->
     elements([a,b,c,d,e,f,g,h]).
 
-thing() -> oneof([b, atoms()]).
-
 unique_list() ->
     unique_list([]).
 unique_list(Xs) ->
