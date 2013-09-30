@@ -11,8 +11,8 @@ unique_list() ->
     unique_list([]).
 unique_list(Xs) ->
     oneof([[],
-           ?LAZY(?LET(X, ?SUCHTHAT(Y, atoms(), not member(Y, Xs)),
-                [X|unique_list([X|Xs])]))]).
+           ?LET(X, ?SUCHTHAT(Y, atoms(), not member(Y, Xs)),
+               [X|unique_list([X|Xs])])]).
 
 member(_, []) ->
     false;
