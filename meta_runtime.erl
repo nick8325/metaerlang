@@ -20,9 +20,6 @@ apply({'fun', M, F, A}, Args) ->
 apply(Fun, Args) ->
     {apply, Fun, Args}.
 
-make_fun(Mod, Fun, Arity) ->
-    {'fun', Mod, Fun, Arity}.
-
 'case'(Values, Clauses) ->
     {'case', Values, Clauses}.
 
@@ -37,9 +34,6 @@ clause(Patts, Guard, Body) ->
 
 alias(X, Y) ->
     {alias, X, Y}.
-
-tuple(Xs) ->
-    {tuple, Xs}.
 
 primop(partial_application, [F|Args]) ->
     partial_application(F, Args);

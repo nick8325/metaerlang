@@ -8,7 +8,7 @@
                c_var/1, var_name/1,
                c_catch/1, catch_body/1,
                try_arg/1, try_body/1, try_vars/1, try_evars/1, try_handler/1,
-               c_tuple/1, tuple_es/1,
+               update_c_tuple/2, c_tuple/1, tuple_es/1,
                make_list/1, list_elements/1, c_cons/2,
                alias_var/1, alias_pat/1,
                update_c_cons/3, cons_head/1, cons_tail/1,
@@ -249,17 +249,20 @@ make_symbolic(Expr) ->
 make_symbolic(apply, Apply) ->
     runtime(apply, [apply_op(Apply), make_list(apply_args(Apply))]);
 make_symbolic(call, Call) ->
-    Fun = runtime(make_fun,
-                  [call_module(Call), call_name(Call), c_int(call_arity(Call))]),
+    Fun = c_tuple([c_atom(make_fun),
+                   make_list([call_module(Call), call_name(Call), c_int(call_arity(Call))])]),
     runtime(apply, [Fun, make_list(call_args(Call))]);
 make_symbolic(tuple, Tuple) ->
-    runtime(tuple, [make_list(tuple_es(Tuple))]);
+    update_c_tuple(Tuple,
+                   [c_atom(tuple),
+                    make_list(tuple_es(Tuple))]);
 make_symbolic(primop, Primop) ->
     runtime(primop, [primop_name(Primop), make_list(primop_args(Primop))]);
 make_symbolic(var, Var) ->
     case var_name(Var) of
         {Fun, Arity} ->
-            runtime(make_fun, [c_atom(get(module_name)), c_atom(Fun), c_int(Arity)]);
+            c_tuple([c_atom(make_fun),
+                     make_list([c_atom(get(module_name)), c_atom(Fun), c_int(Arity)])]);
         _ ->
             Var
     end;
