@@ -280,17 +280,27 @@ make_symbolic(clause, Clause) ->
     %% Instantiate the variables in the clause's pattern.
     Vars = clause_vars(Clause),
     bind(Vars,
-          runtime(clause, [make_list(clause_pats(Clause)),
+          runtime(clause, [make_alias_symbolic(make_list(clause_pats(Clause))),
                            clause_guard(Clause),
                            c_fun([], clause_body(Clause))]));
 make_symbolic(alias, Alias) ->
-    runtime(alias, [alias_var(Alias), alias_pat(Alias)]);
+    Alias;
 make_symbolic(Type, Expr) when
       Type == literal; Type == 'let'; Type == seq; Type == values; Type == cons;
       Type == 'fun' ->
     Expr;
 make_symbolic(_, Expr) ->
     runtime(unknown, [c_atom(type(Expr))]).
+
+%% We have to make aliases symbolic *after* making the enclosing case
+%% symbolic - otherwise the call to runtime:alias occurs inside a
+%% pattern, which the compiler doesn't take kindly to.
+make_alias_symbolic(Expr) ->
+    map_with_type(fun make_alias_symbolic/2, Expr).
+make_alias_symbolic(alias, Alias) ->
+    runtime(alias, [alias_var(Alias), alias_pat(Alias)]);
+make_alias_symbolic(_, Expr) ->
+    Expr.
 
 bind(Vars, Expr) ->
     c_let(Vars,
