@@ -2,6 +2,12 @@
 -module(prolog).
 -compile(export_all).
 
+c(Mod) ->
+    c(Mod, [report]).
+c(Mod, Opts) ->
+    meta:c(Mod, Opts),
+    file:write_file(atom_to_list(Mod) ++ ".pl", translate(Mod)).
+
 translate(Mod) ->
     Clauses =
     lists:flatten(
@@ -211,7 +217,3 @@ sequence(_, CoOp, [{CoOp, []}|_], _) ->
     {CoOp, []};
 sequence(Op, CoOp, [X|Xs], Ys) ->
     sequence(Op, CoOp, Xs, [X|Ys]).
-
-test() ->
-    meta:c(test),
-    file:write_file("test.pl", translate(test)).
