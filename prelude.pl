@@ -1,10 +1,14 @@
-:- module(prelude, [new_function/4, apply/4, apply_fun/4, noteq/2, not_unifiable/2, solve/1]).
+:- module(prelude, [new_function/4, apply/4, apply_fun/4, is_fun/1, noteq/2, not_unifiable/2, solve/1]).
 
 :- dynamic(is_function/4).
 
 :- meta_predicate new_function(?, ?, ?, :).
 new_function(Mod, Fun, Arity, Apply) :-
     assertz(is_function(Mod, Fun, Arity, Apply)).
+
+:- new_function(erlang, not, 1, erlang_not).
+erlang_not(true, false).
+erlang_not(false, true).
 
 apply(Mod, Fun, Res, Args) :-
     is_function(Mod, Fun, Arity, Apply),
@@ -13,14 +17,23 @@ apply(Mod, Fun, Res, Args) :-
     apply(Apply, [Res|Args]).
 apply(Mod, Fun, _, Args) :-
     length(Args, Arity),
-    format("*** Unknown function ~p:~p/~p", [Mod, Fun, Arity]).
+    format("*** Unknown function ~p:~p/~p~n", [Mod, Fun, Arity]),
+    trace,
+    fail.
 
 apply_fun(_, fun(Mod, Fun, Arity), Res, Args) :-
+    !,
     length(Args, Arity),
     apply(Mod, Fun, Res, Args).
-apply_fun(Mod, fun(thunk, Fun, Xs), Res, Ys) :-
+apply_fun(Mod, thunk(Fun, Xs), Res, Ys) :-
+    !,
     append(Xs, Ys, Zs),
     apply_fun(Mod, Fun, Res, Zs).
+apply_fun(Mod, Fun, Res, Args) :-
+    apply(Mod, Fun, Res, Args).
+
+is_fun(fun(_,_,_)).
+is_fun(thunk(_,_)).
 
 not_unifiable(X, Y) :-
     \+ X = Y.
