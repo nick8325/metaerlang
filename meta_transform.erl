@@ -219,11 +219,13 @@ subst(_, _, Expr) ->
 runtime_key() ->
     '!runtime'.
 runtime() ->
-    c_call(c_atom(erlang), c_atom(get), [c_atom(runtime_key())]).
+    c_var(runtime_key()).
+bind_runtime(Body) ->
+    c_let([runtime()],
+          c_call(c_atom(erlang), c_atom(get), [c_atom(runtime_key())]),
+          Body).
 runtime(Fun, Args) ->
-    Runtime = c_var(fresh_name()),
-    c_let([Runtime], runtime(),
-          c_call(Runtime, c_atom(Fun), Args)).
+    c_call(runtime(), c_atom(Fun), Args).
 
 %% Generate a call to the partial application "primop".
 partial_application(Fun, []) ->
@@ -293,9 +295,13 @@ make_symbolic(clause, Clause) ->
 make_symbolic(alias, Alias) ->
     Alias;
 make_symbolic(Type, Expr) when
-      Type == literal; Type == 'let'; Type == seq; Type == values; Type == cons;
-      Type == 'fun' ->
+      Type == literal; Type == 'let'; Type == seq; Type == values;
+      Type == cons ->
     Expr;
+make_symbolic('fun', Fun) ->
+    %% Bind the runtime.
+    update_c_fun(Fun, fun_vars(Fun),
+                 bind_runtime(fun_body(Fun)));
 make_symbolic(_, Expr) ->
     runtime(unknown, [c_atom(type(Expr))]).
 
