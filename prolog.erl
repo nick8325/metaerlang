@@ -9,13 +9,18 @@ c(Mod, Opts) ->
     file:write_file(atom_to_list(Mod) ++ ".pl", translate(Mod)).
 
 translate(Mod) ->
+    Name = atom_to_list(Mod),
     Clauses =
     lists:flatten(
     [ translate(Mod, Fun, Arity)
       || {Fun, Arity} <- meta:exports(Mod) ]),
 
-    [":- use_module(prelude).\n",
-     "apply_fun(Fun, Res, Args) :- apply_fun(" ++ atom_to_list(Mod) ++ ", Fun, Res, Args).\n\n",
+    [":- module(", Name, ", [",
+     comma([ [ show_atom(Fun), "/", integer_to_list(length(Args)) ]
+           || {assert, Fun, Args, _} <- lists:flatten(Clauses) ]),
+     "]).\n",
+     ":- use_module(prelude).\n",
+     "apply_fun(Fun, Res, Args) :- apply_fun(", Name, ", Fun, Res, Args).\n\n",
      pretty(Clauses) ].
 
 pretty(Clauses) ->
@@ -25,7 +30,7 @@ pretty_clause({goal, Goal}) ->
 pretty_clause({assert, Name, Args, Body}) ->
     put(vars, gb_trees:empty()),
     put(id, 0),
-    [ "'", atom_to_list(Name), "'",
+    [ show_atom(Name),
       brack(comma(lists:map(fun pretty_exp/1, Args))), " :-\n",
       pretty_exp(Body), ".\n\n" ].
 
@@ -40,14 +45,14 @@ pretty_exp({choice, Xs}) ->
 pretty_exp({unify, X, Y}) ->
     brack([ pretty_exp(X), " = ", pretty_exp(Y) ]);
 pretty_exp({call, Fun, Args}) ->
-    [ "'", atom_to_list(Fun), "'",
+    [ show_atom(Fun),
       brack(comma(lists:map(fun pretty_exp/1, Args))) ];
 pretty_exp(Var={var, _}) ->
     show_var(Var);
 pretty_exp(N) when is_integer(N) ->
     integer_to_list(N);
 pretty_exp(X) when is_atom(X) ->
-    "'" ++ atom_to_list(X) ++ "'";
+    show_atom(X);
 pretty_exp({functor, F, []}) ->
     pretty_exp(F);
 pretty_exp({functor, F, Args}) ->
@@ -56,6 +61,9 @@ pretty_exp([]) ->
     "[]";
 pretty_exp([X|Xs]) ->
     ["[", pretty_exp(X), "|", pretty_exp(Xs), "]"].
+
+show_atom(X) when is_atom(X) ->
+    "'" ++ atom_to_list(X) ++ "'".
 
 show_var(Var) ->
     Vars = get(vars),
@@ -81,9 +89,7 @@ sep(S, [X|Xs]) ->
 
 translate(Mod, Fun, Arity) ->
     Vars = [meta_runtime:new_var() || _ <- lists:seq(1, Arity)],
-    Name = list_to_atom(atom_to_list(Mod) ++ ":" ++
-                        atom_to_list(Fun) ++ "/" ++
-                        integer_to_list(Arity)),
+    Name = list_to_atom(atom_to_list(Mod) ++ ":" ++ atom_to_list(Fun)),
     Exp = meta:apply(meta_runtime, Mod, Fun, Vars),
     {Res, Clause} = expr(Exp),
     [ {goal, {call, new_function, [Mod, Fun, Arity, Name]}},
