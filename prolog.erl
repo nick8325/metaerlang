@@ -15,6 +15,7 @@ translate(Mod) ->
       || {Fun, Arity} <- meta:exports(Mod) ]),
 
     [":- use_module(prelude).\n",
+     ":- discontiguous(apply/3).\n",
      ":- new_module(" ++ atom_to_list(Mod), ", apply).\n\n",
      pretty(Clauses) ].
 
@@ -79,8 +80,9 @@ sep(S, [X|Xs]) ->
 
 translate(Mod, Fun, Arity) ->
     Vars = [meta_runtime:new_var() || _ <- lists:seq(1, Arity)],
-    Name = list_to_atom(lists:flatten(
-               io_lib:format("~p:~p/~p", [Mod, Fun, Arity]))),
+    Name = list_to_atom(atom_to_list(Mod) ++ ":" ++
+                        atom_to_list(Fun) ++ "/" ++
+                        integer_to_list(Arity)),
     Exp = meta:apply(meta_runtime, Mod, Fun, Vars),
     {Res, Clause} = expr(Exp),
     [ assert(Name, [Res|Vars], Clause),
@@ -98,8 +100,12 @@ expr(Exp) ->
 
 expr({'case', Vars, Clauses}, Res) ->
     {Res, clauses(Vars, Clauses, Res)};
-expr(Lit, _) when is_integer(Lit); is_atom(Lit); is_list(Lit) ->
+expr(Lit, _) when is_integer(Lit); is_atom(Lit); Lit == [] ->
     {Lit, true()};
+expr([X|Xs], _) ->
+    {XR, XC} = expr(X),
+    {XsR, XsC} = expr(Xs),
+    {[XR|XsR], seq([XC, XsC])};
 expr(Var={var,_}, _) ->
     {Var, true()};
 expr({failure}, Res) ->
