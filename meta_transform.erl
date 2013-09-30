@@ -289,7 +289,7 @@ make_symbolic(clause, Clause) ->
     bind(Vars,
           runtime(clause, [make_alias_symbolic(make_list(clause_pats(Clause))),
                            clause_guard(Clause),
-                           c_fun([], clause_body(Clause))]));
+                           clause_body(Clause)]));
 make_symbolic(alias, Alias) ->
     Alias;
 make_symbolic(Type, Expr) when

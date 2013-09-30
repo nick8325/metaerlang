@@ -142,7 +142,7 @@ clauses(Vars, Clauses, Res) ->
 clauses(_, [], _, _) ->
     false();
 clauses(Vars, [{clause, Patts, Guard, Body}|Clauses], Res, PrevGuard) ->
-    {Res1, Expr} = expr(Body(), Res),
+    {Res1, Expr} = expr(Body, Res),
     NextGuard = seq([guard(Guard),
                      choice([invert_match(fun not_unifiable/2,
                                           match(Vars, Patts, true(), true())),
