@@ -100,12 +100,22 @@ assert(Name, Vars, {choice, Xs}) ->
 assert(Name, Vars, E) ->
     {assert, Name, Vars, E}.
 
-
 expr(Exp) ->
     expr(Exp, meta_runtime:new_var()).
 
-expr({'case', Vars, Clauses}, Res) ->
-    {Res, clauses(Vars, Clauses, Res)};
+expr_var(Exp) ->
+    {Res, Clause} = expr(Exp),
+    case Res of
+        {var, _} ->
+            {Res, Clause};
+        _ ->
+            Var = meta_runtime:new_var(),
+            {Var, seq([Clause, unify(Var, Res)])}
+    end.
+
+expr({'case', Exprs, Clauses}, Res) ->
+    {Vars, Clause} = exprs_var(Exprs),
+    {Res, seq([Clause, clauses(Vars, Clauses, Res)])};
 expr(Lit, _) when is_integer(Lit); is_atom(Lit); Lit == [] ->
     {Lit, true()};
 expr([X|Xs], _) ->
@@ -125,10 +135,6 @@ expr({apply, Fun, Args}, Res) ->
 expr({tuple, Tuple}, _) ->
     {Res, Clause} = exprs(Tuple),
     {{functor, tuple, Res}, Clause};
-expr({alias, X1, X2}, Res) ->
-    {X1R, X1C} = expr(X1, Res),
-    {X2R, X2C} = expr(X2, Res),
-    {X1R, seq([X1C, X2C, unify(X1R, X2R)])};
 expr({'fun', Mod, Fun, Arity}, _) ->
     {Res, Clause} = exprs([Mod, Fun, Arity]),
     {{functor, 'fun', Res}, Clause};
@@ -141,6 +147,10 @@ expr(Exp, _) ->
 
 exprs(Exps) ->
     {Res, Clauses} = lists:unzip(lists:map(fun expr/1, Exps)),
+    {Res, seq(Clauses)}.
+
+exprs_var(Exps) ->
+    {Res, Clauses} = lists:unzip(lists:map(fun expr_var/1, Exps)),
     {Res, seq(Clauses)}.
 
 clauses(Vars, Clauses, Res) ->
@@ -157,14 +167,32 @@ clauses(Vars, [{clause, Patts, Guard, Body}|Clauses], Res, PrevGuard) ->
             clauses(Vars, Clauses, Res, NextGuard)]).
 
 match(Vars, Patts, Guard, Body) ->
-    lists:foldl(fun lett/2, seq([Guard, Body]),
-                    lists:zip(Patts, Vars)).
+    Binds = lists:zip(Patts, Vars),
+    Binds1 = lists:concat(lists:map(fun flatten_binds/1, Binds)),
+    lists:foldl(fun match/2, seq([Guard, Body]), Binds1).
 
-lett({X={var, _}, T}, U) ->
-    subst(X, T, U);
-lett({T, U}, V) ->
-    {_, Clause} = expr({alias, T, U}),
-    seq([Clause, V]).
+flatten_binds({T, U}) ->
+    {BindsT, T1} = flatten_patt(T),
+    [{T1, U}|BindsT].
+
+flatten_patt({alias, X={var,_}, T}) ->
+    {Binds, T1} = flatten_patt(T),
+    {[{X, T1}|Binds], X};
+flatten_patt([T|U]) ->
+    {BindsT, T1} = flatten_patt(T),
+    {BindsU, U1} = flatten_patt(U),
+    {BindsT ++ BindsU, [T1|U1]};
+flatten_patt({tuple, T}) ->
+    {BindsT, T1} = flatten_patt(T),
+    {BindsT, {functor, tuple, T1}};
+flatten_patt(X) ->
+    {E, {seq, []}} = expr(X), % X should be a literal
+    {[], E}.
+
+match({X={var, _}, T}, Body) ->
+    subst(X, T, Body);
+match({T, U}, Body) ->
+    seq([unify(T, U), Body]).
 
 subst(X, T, {seq, Xs}) ->
     seq(subst(X, T, Xs));
