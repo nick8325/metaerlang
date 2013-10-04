@@ -237,6 +237,12 @@ guard({apply, erlang, '=:=', [X, Y]}) ->
     {V1, C1} = expr(X),
     {V2, C2} = expr(Y),
     seq([ C1, C2, unify(V1, V2)]);
+guard({'try', Guard, _, _}) ->
+    guard(Guard);
+guard({apply, erlang, 'and', [X, Y]}) ->
+    seq([guard(X), guard(Y)]);
+guard({apply, erlang, 'or', [X, Y]}) ->
+    choice([guard(X), guard(Y)]);
 guard(Guard) ->
     io:format("*** Unknown guard ~p~n", [Guard]),
     false().
