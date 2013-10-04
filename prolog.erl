@@ -6,7 +6,7 @@ c(Mod) ->
     c(Mod, [report]).
 c(Mod, Opts) ->
     meta:c(Mod, Opts),
-    file:write_file(atom_to_list(Mod) ++ ".pl", translate(Mod)).
+    file:write_file("erl_" ++ atom_to_list(Mod) ++ ".pl", translate(Mod)).
 
 translate(Mod) ->
     Name = atom_to_list(Mod),
@@ -15,7 +15,7 @@ translate(Mod) ->
     [ translate(Mod, Fun, Arity)
       || {Fun, Arity} <- meta:exports(Mod) ]),
 
-    [":- module(", Name, ", [",
+    [":- module(erl_", Name, ", [",
      comma([ [ show_atom(Fun), "/", integer_to_list(length(Args)) ]
            || {assert, Fun, Args, _} <- lists:flatten(Clauses) ]),
      "]).\n",
